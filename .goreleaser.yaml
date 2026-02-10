@@ -70,11 +70,11 @@ archives:
   - id: agent-binaries
     ids: [codedeploy-agent]
     formats: [binary]
-    name_template: "{{ .Binary }}{{ .Ext }}"
+    name_template: "{{ .Binary }}"
   - id: local-binaries
     ids: [codedeploy-local]
     formats: [binary]
-    name_template: "{{ .Binary }}{{ .Ext }}"
+    name_template: "{{ .Binary }}"
 
 # Linux packages via nFPM
 nfpms:
