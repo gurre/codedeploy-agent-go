@@ -290,7 +290,7 @@ create_deployment() {
     local bundle_key
     bundle_key=$(get_bundle_key "${os_name}")
 
-    log "Creating deployment for ${os_name} (DG=${dg_name})"
+    log "Creating deployment for ${os_name} (DG=${dg_name})" >&2
     aws deploy create-deployment \
         --application-name "${CODEDEPLOY_APP}" \
         --deployment-group-name "${dg_name}" \
