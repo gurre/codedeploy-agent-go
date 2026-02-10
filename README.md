@@ -69,13 +69,14 @@ systemctl enable --now codedeploy-agent
 ```powershell
 <powershell>
 $VERSION = "0.1.0"
+$VERSION_DASHED = $VERSION.Replace('.', '-')
 $ARCH = if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { 'arm64' } else { 'x86_64' }
 
 mkdir -Force C:\codedeploy-agent\bin, C:\codedeploy-agent\deployment-root, `
     C:\codedeploy-agent\logs, C:\codedeploy-agent\conf
 
 curl.exe -fsSLo C:\codedeploy-agent\bin\codedeploy-agent.exe `
-    "https://github.com/gurre/codedeploy-agent-go/releases/download/v${VERSION}/codedeploy-agent_windows_${ARCH}.exe"
+    "https://github.com/gurre/codedeploy-agent-go/releases/download/v${VERSION}/codedeploy-agent_${VERSION_DASHED}_windows_${ARCH}.exe"
 
 $action = New-ScheduledTaskAction -Execute C:\codedeploy-agent\bin\codedeploy-agent.exe `
     -Argument "start"
@@ -94,8 +95,9 @@ a service file and default config, then enables and starts the service.
 
 ```bash
 VERSION=0.1.0
+VERSION_DASHED=$(echo "$VERSION" | tr '.' '-')
 case $(uname -m) in x86_64) ARCH=x86_64;; aarch64) ARCH=arm64;; armv7l) ARCH=armv7;; esac
-curl -fsSLo codedeploy-agent "https://github.com/gurre/codedeploy-agent-go/releases/download/v${VERSION}/codedeploy-agent_linux_${ARCH}"
+curl -fsSLo codedeploy-agent "https://github.com/gurre/codedeploy-agent-go/releases/download/v${VERSION}/codedeploy-agent_${VERSION_DASHED}_linux_${ARCH}"
 chmod +x codedeploy-agent
 sudo ./codedeploy-agent install
 ```

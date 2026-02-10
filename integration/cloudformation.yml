@@ -41,7 +41,7 @@ Parameters:
 
   AgentVersion:
     Type: String
-    Description: Agent release version (e.g. 0.1.0). Instances download from GitHub Releases.
+    Description: Agent release version (e.g. 0.1.0). Linux instances install packages from GitHub Releases.
 
 Resources:
   # ---------------------------------------------------------------------------
@@ -127,23 +127,14 @@ Resources:
         Fn::Base64: !Sub |
           #!/bin/bash
           set -euo pipefail
-          mkdir -p /opt/codedeploy-agent/bin
-          mkdir -p /opt/codedeploy-agent/deployment-root
-          mkdir -p /var/log/aws/codedeploy-agent
-          mkdir -p /etc/codedeploy-agent/conf
+          VERSION="${AgentVersion}"
+          URL="https://github.com/gurre/codedeploy-agent-go/releases/download/v${!VERSION}/codedeploy-agent_${!VERSION}_linux_amd64.rpm"
+          curl -fsSLo /tmp/codedeploy-agent.rpm "${!URL}"
+          dnf install -y /tmp/codedeploy-agent.rpm
           cat > /etc/codedeploy-agent/conf/codedeployagent.yml <<'CONF'
           wait_between_runs: 5
           CONF
-          VERSION="${AgentVersion}"
-          VERSION_DASHED=$(echo "$VERSION" | tr '.' '-')
-          BINARY=/opt/codedeploy-agent/bin/codedeploy-agent
-          URL="https://github.com/gurre/codedeploy-agent-go/releases/download/v$VERSION/codedeploy-agent_${!VERSION_DASHED}_linux_x86_64"
-          LOGFILE=/var/log/aws/codedeploy-agent/agent-stdout.log
-          echo "Downloading agent from ${!URL}" > "${!LOGFILE}"
-          curl -fsSLo "${!BINARY}" "${!URL}" 2>>"${!LOGFILE}"
-          chmod +x "${!BINARY}"
-          echo "Agent binary downloaded ($(stat -c%s "${!BINARY}") bytes)" >> "${!LOGFILE}"
-          nohup "${!BINARY}" /etc/codedeploy-agent/conf/codedeployagent.yml >> "${!LOGFILE}" 2>&1 &
+          systemctl enable --now codedeploy-agent
 
   InstanceAl2:
     Type: AWS::EC2::Instance
@@ -164,23 +155,14 @@ Resources:
         Fn::Base64: !Sub |
           #!/bin/bash
           set -euo pipefail
-          mkdir -p /opt/codedeploy-agent/bin
-          mkdir -p /opt/codedeploy-agent/deployment-root
-          mkdir -p /var/log/aws/codedeploy-agent
-          mkdir -p /etc/codedeploy-agent/conf
+          VERSION="${AgentVersion}"
+          URL="https://github.com/gurre/codedeploy-agent-go/releases/download/v${!VERSION}/codedeploy-agent_${!VERSION}_linux_amd64.rpm"
+          curl -fsSLo /tmp/codedeploy-agent.rpm "${!URL}"
+          yum localinstall -y /tmp/codedeploy-agent.rpm
           cat > /etc/codedeploy-agent/conf/codedeployagent.yml <<'CONF'
           wait_between_runs: 5
           CONF
-          VERSION="${AgentVersion}"
-          VERSION_DASHED=$(echo "$VERSION" | tr '.' '-')
-          BINARY=/opt/codedeploy-agent/bin/codedeploy-agent
-          URL="https://github.com/gurre/codedeploy-agent-go/releases/download/v$VERSION/codedeploy-agent_${!VERSION_DASHED}_linux_x86_64"
-          LOGFILE=/var/log/aws/codedeploy-agent/agent-stdout.log
-          echo "Downloading agent from ${!URL}" > "${!LOGFILE}"
-          curl -fsSLo "${!BINARY}" "${!URL}" 2>>"${!LOGFILE}"
-          chmod +x "${!BINARY}"
-          echo "Agent binary downloaded ($(stat -c%s "${!BINARY}") bytes)" >> "${!LOGFILE}"
-          nohup "${!BINARY}" /etc/codedeploy-agent/conf/codedeployagent.yml >> "${!LOGFILE}" 2>&1 &
+          systemctl enable --now codedeploy-agent
 
   InstanceUbuntu:
     Type: AWS::EC2::Instance
@@ -203,23 +185,14 @@ Resources:
           set -euo pipefail
           snap install amazon-ssm-agent --classic
           snap start amazon-ssm-agent
-          mkdir -p /opt/codedeploy-agent/bin
-          mkdir -p /opt/codedeploy-agent/deployment-root
-          mkdir -p /var/log/aws/codedeploy-agent
-          mkdir -p /etc/codedeploy-agent/conf
+          VERSION="${AgentVersion}"
+          URL="https://github.com/gurre/codedeploy-agent-go/releases/download/v${!VERSION}/codedeploy-agent_${!VERSION}_linux_amd64.deb"
+          curl -fsSLo /tmp/codedeploy-agent.deb "${!URL}"
+          dpkg -i /tmp/codedeploy-agent.deb
           cat > /etc/codedeploy-agent/conf/codedeployagent.yml <<'CONF'
           wait_between_runs: 5
           CONF
-          VERSION="${AgentVersion}"
-          VERSION_DASHED=$(echo "$VERSION" | tr '.' '-')
-          BINARY=/opt/codedeploy-agent/bin/codedeploy-agent
-          URL="https://github.com/gurre/codedeploy-agent-go/releases/download/v$VERSION/codedeploy-agent_${!VERSION_DASHED}_linux_x86_64"
-          LOGFILE=/var/log/aws/codedeploy-agent/agent-stdout.log
-          echo "Downloading agent from ${!URL}" > "${!LOGFILE}"
-          curl -fsSLo "${!BINARY}" "${!URL}" 2>>"${!LOGFILE}"
-          chmod +x "${!BINARY}"
-          echo "Agent binary downloaded ($(stat -c%s "${!BINARY}") bytes)" >> "${!LOGFILE}"
-          nohup "${!BINARY}" /etc/codedeploy-agent/conf/codedeployagent.yml >> "${!LOGFILE}" 2>&1 &
+          systemctl enable --now codedeploy-agent
 
   InstanceWindows:
     Type: AWS::EC2::Instance

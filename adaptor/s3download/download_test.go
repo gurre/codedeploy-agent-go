@@ -23,7 +23,7 @@ func newTestDownloader(t *testing.T, handler http.Handler) (*Downloader, *httpte
 		Credentials: credentials.NewStaticCredentialsProvider("AKID", "SECRET", ""),
 	}
 
-	dl := NewDownloader(cfg, "us-east-1", server.URL, false, slog.Default())
+	dl := NewDownloader(cfg, "us-east-1", server.URL, false, nil, slog.Default())
 	return dl, server
 }
 

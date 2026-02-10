@@ -21,12 +21,16 @@ type Downloader struct {
 }
 
 // NewDownloader creates a GitHub downloader.
+// Pass a non-nil transport to apply a custom round-tripper (e.g. proxy);
+// nil uses Go's default transport. The client always uses a 60s timeout
+// and unlimited redirects (GitHub API uses 1-2 redirects for downloads).
 //
-//	dl := githubdownload.NewDownloader(slog.Default())
+//	dl := githubdownload.NewDownloader(nil, slog.Default())
 //	err := dl.Download(ctx, "octocat", "hello-world", "abc123", "tar", "ghp_token", "/tmp/bundle.tar")
-func NewDownloader(logger *slog.Logger) *Downloader {
+func NewDownloader(transport http.RoundTripper, logger *slog.Logger) *Downloader {
 	return &Downloader{
 		httpClient: &http.Client{
+			Transport:     transport,
 			Timeout:       60 * time.Second,
 			CheckRedirect: func(req *http.Request, via []*http.Request) error { return nil },
 		},

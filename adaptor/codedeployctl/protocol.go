@@ -36,6 +36,7 @@ func (c *Client) doRequest(ctx context.Context, operation string, input interfac
 
 	req.Header.Set("Content-Type", "application/x-amz-json-"+jsonVersion)
 	req.Header.Set("X-Amz-Target", targetPrefix+"."+operation)
+	req.Header.Set("x-amz-codedeploy-agent-version", c.version)
 
 	creds, err := c.credentials.Retrieve(ctx)
 	if err != nil {

@@ -343,10 +343,10 @@ func buildExecutor(ctx context.Context, rootDir string, maxRevisions int, custom
 	var s3dl *s3download.Downloader
 	awsCfg, err := awsconfig.LoadDefaultConfig(ctx)
 	if err == nil {
-		s3dl = s3download.NewDownloader(awsCfg, awsCfg.Region, "", false, logger)
+		s3dl = s3download.NewDownloader(awsCfg, awsCfg.Region, "", false, nil, logger)
 	}
 
-	ghDl := githubdownload.NewDownloader(logger)
+	ghDl := githubdownload.NewDownloader(nil, logger) // nil transport = default
 	hookMapping := lifecycle.DefaultHookMapping()
 
 	// Merge custom events into hook mapping. Each custom event maps to itself,

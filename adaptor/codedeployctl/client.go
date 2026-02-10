@@ -7,6 +7,7 @@ import (
 	"hash"
 	"log/slog"
 	"net/http"
+	"runtime/debug"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -40,18 +41,21 @@ type Envelope struct {
 
 // Client communicates with the CodeDeploy Commands service.
 type Client struct {
-	httpClient  *http.Client
-	credentials aws.CredentialsProvider
 	endpoint    string
 	region      string
+	version     string
+	httpClient  *http.Client
+	credentials aws.CredentialsProvider
 	logger      *slog.Logger
 }
 
 // NewClient creates a CodeDeploy Commands service client.
+// Pass a non-nil transport to apply a custom round-tripper (e.g. proxy);
+// nil uses Go's default transport. The client always uses an 80s timeout.
 //
-//	client := codedeployctl.NewClient(cfg.Credentials(), "us-east-1", "", slog.Default())
+//	client := codedeployctl.NewClient(cfg.Credentials(), "us-east-1", "", nil, slog.Default())
 //	cmd, err := client.PollHostCommand(ctx, "arn:aws:ec2:...")
-func NewClient(creds aws.CredentialsProvider, region, endpointOverride string, logger *slog.Logger) *Client {
+func NewClient(creds aws.CredentialsProvider, region, endpointOverride string, transport http.RoundTripper, logger *slog.Logger) *Client {
 	endpoint := endpointOverride
 	if endpoint == "" {
 		endpoint = fmt.Sprintf("https://codedeploy-commands.%s.amazonaws.com", region)
@@ -59,13 +63,25 @@ func NewClient(creds aws.CredentialsProvider, region, endpointOverride string, l
 
 	return &Client{
 		httpClient: &http.Client{
-			Timeout: 80 * time.Second,
+			Transport: transport,
+			Timeout:   80 * time.Second,
 		},
 		credentials: creds,
 		endpoint:    endpoint,
 		region:      region,
+		version:     resolveVersion(),
 		logger:      logger,
 	}
+}
+
+// resolveVersion reads the module version from Go build info.
+// Falls back to "unknown" when build info is unavailable (e.g. go run).
+func resolveVersion() string {
+	bi, ok := debug.ReadBuildInfo()
+	if !ok || bi.Main.Version == "" || bi.Main.Version == "(devel)" {
+		return "unknown"
+	}
+	return bi.Main.Version
 }
 
 // PollHostCommand polls for the next deployment command.
@@ -155,15 +171,19 @@ func (c *Client) GetDeploymentSpecification(ctx context.Context, deploymentExecu
 }
 
 // PostUpdate sends a progress update for a command.
+// Pass a non-nil estimatedCompletionTime to inform the service when the command
+// is expected to finish; nil omits the field from the wire payload.
 //
-//	status, err := client.PostUpdate(ctx, hostCommandID, diagnostics)
-func (c *Client) PostUpdate(ctx context.Context, hostCommandIdentifier string, diagnostics *Envelope) (string, error) {
+//	status, err := client.PostUpdate(ctx, hostCommandID, nil, diagnostics)
+func (c *Client) PostUpdate(ctx context.Context, hostCommandIdentifier string, estimatedCompletionTime *time.Time, diagnostics *Envelope) (string, error) {
 	input := struct {
-		HostCommandIdentifier string    `json:"HostCommandIdentifier"`
-		Diagnostics           *Envelope `json:"Diagnostics,omitempty"`
+		HostCommandIdentifier   string     `json:"HostCommandIdentifier"`
+		EstimatedCompletionTime *time.Time `json:"EstimatedCompletionTime,omitempty"`
+		Diagnostics             *Envelope  `json:"Diagnostics,omitempty"`
 	}{
-		HostCommandIdentifier: hostCommandIdentifier,
-		Diagnostics:           diagnostics,
+		HostCommandIdentifier:   hostCommandIdentifier,
+		EstimatedCompletionTime: estimatedCompletionTime,
+		Diagnostics:             diagnostics,
 	}
 
 	var output struct {

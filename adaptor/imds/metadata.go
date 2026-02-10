@@ -46,13 +46,16 @@ type Client struct {
 }
 
 // NewClient creates an IMDS client. Set disableIMDSv1 to prevent v1 fallback.
+// Pass a non-nil transport to apply a custom round-tripper (e.g. proxy);
+// nil uses Go's default transport. The client always uses a 10s timeout.
 //
-//	client := imds.NewClient(false, slog.Default())
+//	client := imds.NewClient(false, nil, slog.Default())
 //	region, err := client.Region(ctx)
-func NewClient(disableIMDSv1 bool, logger *slog.Logger) *Client {
+func NewClient(disableIMDSv1 bool, transport http.RoundTripper, logger *slog.Logger) *Client {
 	return &Client{
 		httpClient: &http.Client{
-			Timeout: httpTimeout,
+			Transport: transport,
+			Timeout:   httpTimeout,
 		},
 		baseURL:       "http://" + imdsAddress + ":" + imdsPort,
 		disableIMDSv1: disableIMDSv1,

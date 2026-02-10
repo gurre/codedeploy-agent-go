@@ -12,7 +12,7 @@ EC2-based integration tests for the Go CodeDeploy agent. Verifies the agent can 
 ## Prerequisites
 
 - AWS CLI v2 configured with credentials that can create CloudFormation stacks, EC2 instances, IAM roles, S3 buckets, and CodeDeploy resources
-- Published GitHub release matching `CDAGENT_VERSION` (instances download the binary at boot)
+- Published GitHub release matching `CDAGENT_VERSION` (Linux instances install deb/rpm packages at boot)
 - `zip` command
 
 ## Environment Variables
@@ -34,7 +34,7 @@ CDAGENT_VERSION=0.1.0 ./integration/run.sh all       # setup -> test -> teardown
 
 ## How It Works
 
-1. **Setup** creates a CloudFormation stack with 4 EC2 instances. Each instance downloads the agent binary from GitHub Releases via UserData at boot. The runner uploads deployment bundle ZIPs to S3.
+1. **Setup** creates a CloudFormation stack with 4 EC2 instances. Linux instances install the agent package (deb/rpm) from GitHub Releases via UserData at boot; systemd manages the agent lifecycle. Windows downloads the binary directly. The runner uploads deployment bundle ZIPs to S3.
 
 2. **Test** creates one CodeDeploy deployment per OS (each deployment group targets a single instance by EC2 tags). On first deployment, CodeDeploy executes 4 of the 9 lifecycle hooks — `BeforeInstall`, `AfterInstall`, `ApplicationStart`, `ValidateService`. The remaining hooks are skipped for two reasons: `ApplicationStop` is skipped because no prior revision exists, and the traffic hooks (`BeforeBlockTraffic`, `AfterBlockTraffic`, `BeforeAllowTraffic`, `AfterAllowTraffic`) are skipped because no load balancer is attached to the deployment group. Each hook script appends its event name to a proof file. The runner reads the proof file via SSM and checks for the expected events.
 
@@ -56,14 +56,14 @@ See `cloudformation.yml` Parameters section. All AMI parameters resolve via SSM 
 aws ssm describe-instance-information --filters Key=InstanceIds,Values=<id> --region <region>
 ```
 
-**Agent not starting** — Check the agent log via SSM:
+**Agent not starting** — Check the agent journal and log via SSM:
 
 ```
 aws ssm send-command --instance-ids <id> --document-name AWS-RunShellScript \
-    --parameters 'commands=["cat /var/log/aws/codedeploy-agent/agent-stdout.log"]'
+    --parameters 'commands=["journalctl -u codedeploy-agent --no-pager"]'
 ```
 
-**Deployment stuck** — The agent polls every 5 seconds. If a deployment stays `InProgress` beyond 300 seconds, check the agent process is running (`pgrep codedeploy-agent`). Agent logs are collected to `tmp/integ-<os>-agent.log` after each test.
+**Deployment stuck** — The agent polls every 5 seconds. If a deployment stays `InProgress` beyond 300 seconds, check the agent service is running (`systemctl status codedeploy-agent`). Agent logs are collected to `tmp/integ-<os>-agent.log` after each test.
 
 **Manually inspect instances** — All instances support SSM Session Manager. No SSH keys or inbound ports are needed:
 

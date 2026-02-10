@@ -2,6 +2,40 @@
 
 Platform: Apple M4 Pro, darwin/arm64, Go 1.25.2
 
+## 2026-02-10 Transport-layer proxy refactor benchmarks
+
+Changes: Refactored proxy support from shared `*http.Client` to shared `http.RoundTripper`. Each adaptor now builds its own `*http.Client` with adaptor-specific timeout (codedeployctl=80s, githubdownload=60s, imds=10s). Struct field alignment on `codedeployctl.Client`.
+
+### adaptor/codedeployctl
+
+| Benchmark          | ops   | ns/op | B/op  | allocs/op |
+| ------------------ | ----- | ----- | ----- | --------- |
+| BenchmarkDoRequest | 24860 | 47884 | 18734 | 198       |
+
+No regression. Allocs unchanged (198). B/op slightly lower from struct alignment (-54 B/op).
+
+## 2026-02-10 Log rotation, proxy, version header benchmarks
+
+Changes: Added `adaptor/logfile` rotating writer, proxy URI support on all HTTP clients, agent version header on CodeDeploy Commands requests, IMDS retry on startup.
+
+### adaptor/logfile
+
+| Benchmark      | ops     | ns/op | B/op | allocs/op |
+| -------------- | ------- | ----- | ---- | --------- |
+| BenchmarkWrite | 1207160 | 971.3 | 0    | 0         |
+
+Zero allocations on the Write hot path. Rotation allocates via `fmt.Sprintf` for file naming only when triggered (~1 per maxBytes written). Mutex contention is the dominant cost.
+
+Memory profile: all allocations from `rotate()` file naming and runtime infrastructure, zero from `Write()`.
+
+### adaptor/codedeployctl
+
+| Benchmark          | ops   | ns/op | B/op  | allocs/op |
+| ------------------ | ----- | ----- | ----- | --------- |
+| BenchmarkDoRequest | 24568 | 47545 | 18788 | 198       |
+
++7 allocs vs previous (191→198) from version header `req.Header.Set` and `runtime/debug.ReadBuildInfo` at construction time. Negligible per-request overhead.
+
 ## 2026-02-10 Retry storm prevention benchmarks
 
 Changes: Added `logic/backoff` package with jittered exponential backoff. Pure computation — no I/O.

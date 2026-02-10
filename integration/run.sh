@@ -1,6 +1,6 @@
 #!/bin/bash
 # Integration test runner for the Go CodeDeploy agent.
-# Instances download the agent binary from GitHub Releases at boot via UserData.
+# Linux instances install the agent package (deb/rpm) from GitHub Releases at boot via UserData.
 # The runner creates infrastructure, uploads deployment bundles to S3,
 # triggers CodeDeploy deployments, and verifies lifecycle hook execution.
 #
@@ -392,7 +392,7 @@ collect_logs() {
             "commands=['Get-Content C:\\codedeploy-agent\\logs\\agent-stdout.log -ErrorAction SilentlyContinue; Get-Content C:\\codedeploy-agent\\logs\\agent-run.log -ErrorAction SilentlyContinue']" 2>/dev/null || echo "(no log)")
     else
         agent_log=$(run_ssm_command "${instance_id}" "AWS-RunShellScript" \
-            "commands=['cat /var/log/aws/codedeploy-agent/agent-stdout.log 2>/dev/null || echo \"(no log)\"']" 2>/dev/null || echo "(no log)")
+            "commands=['echo \"=== journalctl ===\"; journalctl -u codedeploy-agent --no-pager 2>/dev/null || echo \"(no journal)\"; echo \"=== codedeploy-agent.log ===\"; cat /var/log/aws/codedeploy-agent/codedeploy-agent.log 2>/dev/null || echo \"(no log)\"']" 2>/dev/null || echo "(no log)")
     fi
 
     echo "${agent_log}" > "${TMP_DIR}/integ-${os_name}-agent.log"

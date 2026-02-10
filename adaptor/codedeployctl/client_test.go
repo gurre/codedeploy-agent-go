@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	json "github.com/goccy/go-json"
@@ -28,7 +29,7 @@ func staticCredentials() aws.CredentialsProviderFunc {
 // newTestClient creates a Client pointed at the given httptest server URL.
 func newTestClient(t *testing.T, serverURL string) *Client {
 	t.Helper()
-	return NewClient(staticCredentials(), "us-east-1", serverURL, slog.Default())
+	return NewClient(staticCredentials(), "us-east-1", serverURL, nil, slog.Default())
 }
 
 // assertHeader verifies a request header has the expected value.
@@ -365,7 +366,59 @@ func TestPostUpdate_Success(t *testing.T) {
 
 	client := newTestClient(t, srv.URL)
 	diag := &Envelope{Format: "JSON", Payload: `{"step":"downloading"}`}
-	status, err := client.PostUpdate(context.Background(), "cmd-456", diag)
+	status, err := client.PostUpdate(context.Background(), "cmd-456", nil, diag)
+	if err != nil {
+		t.Fatalf("PostUpdate: %v", err)
+	}
+	if status != "InProgress" {
+		t.Errorf("CommandStatus = %q, want %q", status, "InProgress")
+	}
+}
+
+// TestPostUpdate_WithEstimatedCompletionTime verifies that a non-nil
+// EstimatedCompletionTime is serialized into the wire payload. The Ruby SDK
+// defines this as an optional TimestampShape; the service uses it to estimate
+// when long-running deployments will finish.
+func TestPostUpdate_WithEstimatedCompletionTime(t *testing.T) {
+	ect := time.Date(2025, 6, 15, 12, 30, 0, 0, time.UTC)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assertHeader(t, r, "X-Amz-Target", "CodeDeployCommandService_v20141006.PostHostCommandUpdate")
+
+		body, _ := io.ReadAll(r.Body)
+		var input struct {
+			HostCommandIdentifier   string  `json:"HostCommandIdentifier"`
+			EstimatedCompletionTime *string `json:"EstimatedCompletionTime"`
+			Diagnostics             *struct {
+				Format  string `json:"Format"`
+				Payload string `json:"Payload"`
+			} `json:"Diagnostics"`
+		}
+		if err := json.Unmarshal(body, &input); err != nil {
+			t.Fatalf("unmarshal request body: %v", err)
+		}
+		if input.HostCommandIdentifier != "cmd-789" {
+			t.Errorf("HostCommandIdentifier = %q, want %q", input.HostCommandIdentifier, "cmd-789")
+		}
+		if input.EstimatedCompletionTime == nil {
+			t.Fatal("EstimatedCompletionTime is nil, want non-nil")
+		}
+		parsed, err := time.Parse(time.RFC3339Nano, *input.EstimatedCompletionTime)
+		if err != nil {
+			t.Fatalf("parse EstimatedCompletionTime: %v", err)
+		}
+		if !parsed.Equal(ect) {
+			t.Errorf("EstimatedCompletionTime = %v, want %v", parsed, ect)
+		}
+
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"CommandStatus":"InProgress"}`))
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	diag := &Envelope{Format: "JSON", Payload: `{"step":"installing"}`}
+	status, err := client.PostUpdate(context.Background(), "cmd-789", &ect, diag)
 	if err != nil {
 		t.Fatalf("PostUpdate: %v", err)
 	}
@@ -503,9 +556,45 @@ func TestIsThrottle_NormalError(t *testing.T) {
 // default endpoint URL when no override is provided. The endpoint format is a
 // contract with the CodeDeploy Commands service.
 func TestNewClient_DefaultEndpoint(t *testing.T) {
-	client := NewClient(staticCredentials(), "eu-west-1", "", slog.Default())
+	client := NewClient(staticCredentials(), "eu-west-1", "", nil, slog.Default())
 	want := "https://codedeploy-commands.eu-west-1.amazonaws.com"
 	if client.endpoint != want {
 		t.Errorf("endpoint = %q, want %q", client.endpoint, want)
+	}
+}
+
+// TestVersionHeader_Present verifies that every request carries the
+// x-amz-codedeploy-agent-version header. Without this header the CodeDeploy
+// service cannot track which agent version is running on a host, which the
+// Ruby agent always sends.
+func TestVersionHeader_Present(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got := r.Header.Get("x-amz-codedeploy-agent-version")
+		if got == "" {
+			t.Error("missing x-amz-codedeploy-agent-version header")
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"HostCommand":null}`))
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	_, err := client.PollHostCommand(context.Background(), "i-test")
+	if err != nil {
+		t.Fatalf("PollHostCommand: %v", err)
+	}
+}
+
+// TestNewClient_CustomTransport verifies that a caller-provided transport is
+// used inside the constructed http.Client. This enables proxy support while
+// preserving the adaptor's 80s timeout.
+func TestNewClient_CustomTransport(t *testing.T) {
+	custom := &http.Transport{}
+	client := NewClient(staticCredentials(), "us-east-1", "", custom, slog.Default())
+	if client.httpClient.Transport != custom {
+		t.Error("expected custom transport to be used")
+	}
+	if client.httpClient.Timeout != 80*time.Second {
+		t.Errorf("timeout = %v, want 80s", client.httpClient.Timeout)
 	}
 }

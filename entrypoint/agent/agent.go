@@ -5,10 +5,14 @@ package agent
 import (
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
+	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
@@ -19,6 +23,7 @@ import (
 	"github.com/gurre/codedeploy-agent-go/adaptor/filesystem"
 	"github.com/gurre/codedeploy-agent-go/adaptor/githubdownload"
 	"github.com/gurre/codedeploy-agent-go/adaptor/imds"
+	"github.com/gurre/codedeploy-agent-go/adaptor/logfile"
 	"github.com/gurre/codedeploy-agent-go/adaptor/pkcs7"
 	"github.com/gurre/codedeploy-agent-go/adaptor/s3download"
 	"github.com/gurre/codedeploy-agent-go/adaptor/scriptrunner"
@@ -38,20 +43,41 @@ import (
 //
 //	err := agent.Run(ctx, "/etc/codedeploy-agent/conf/codedeployagent.yml")
 func Run(ctx context.Context, configPath string) error {
-	logger := slog.Default()
-
 	// Load config
 	cfg, err := configloader.LoadAgent(configPath)
 	if err != nil {
 		return fmt.Errorf("agent: load config: %w", err)
 	}
 
+	// Set up log rotation: write to both stderr (journald) and rotating file
+	logWriter := logfile.NewRotatingWriter(cfg.LogDir, cfg.ProgramName+".log", 64*1024*1024, 8)
+	if err := logWriter.Open(); err != nil {
+		return fmt.Errorf("agent: open log file: %w", err)
+	}
+	defer func() { _ = logWriter.Close() }()
+
+	logger := slog.New(slog.NewTextHandler(io.MultiWriter(os.Stderr, logWriter), nil))
+	slog.SetDefault(logger)
+
 	// Signal handling
 	ctx, cancel := signal.NotifyContext(ctx, syscall.SIGTERM, syscall.SIGINT)
 	defer cancel()
 
+	// Build proxy-aware transport when ProxyURI is configured.
+	// Each adaptor wraps this transport in its own *http.Client with
+	// adaptor-specific timeouts, so we only share the transport layer.
+	var proxyTransport http.RoundTripper
+	if cfg.ProxyURI != "" {
+		proxyURL, parseErr := url.Parse(cfg.ProxyURI)
+		if parseErr != nil {
+			return fmt.Errorf("agent: parse proxy URI: %w", parseErr)
+		}
+		proxyTransport = &http.Transport{Proxy: http.ProxyURL(proxyURL)}
+		logger.Info("proxy configured", "uri", cfg.ProxyURI)
+	}
+
 	// Resolve identity and on-premises credentials
-	identity, err := resolveIdentity(ctx, cfg, logger)
+	identity, err := resolveIdentity(ctx, cfg, proxyTransport, logger)
 	if err != nil {
 		return fmt.Errorf("agent: resolve identity: %w", err)
 	}
@@ -64,6 +90,12 @@ func Run(ctx context.Context, configPath string) error {
 	// Build AWS config with optional on-premises credentials
 	awsOpts := []func(*awsconfig.LoadOptions) error{
 		awsconfig.WithRegion(identity.Region),
+	}
+	if proxyTransport != nil {
+		awsOpts = append(awsOpts, awsconfig.WithHTTPClient(&http.Client{
+			Transport: proxyTransport,
+			Timeout:   cfg.HTTPReadTimeout,
+		}))
 	}
 	if identity.StaticAccessKey != "" && identity.StaticSecretKey != "" {
 		awsOpts = append(awsOpts, awsconfig.WithCredentialsProvider(
@@ -84,23 +116,34 @@ func Run(ctx context.Context, configPath string) error {
 		return fmt.Errorf("agent: create PKCS7 verifier: %w", err)
 	}
 
-	// Build adaptors
+	// Build adaptors — each receives the shared proxy transport and applies
+	// its own timeout internally, except s3download which needs *http.Client
+	// for the AWS SDK.
 	commandClient := codedeployctl.NewClient(
 		awsCfg.Credentials,
 		identity.Region,
 		cfg.DeployControlEndpoint,
+		proxyTransport,
 		logger,
 	)
 
+	var s3ProxyClient *http.Client
+	if proxyTransport != nil {
+		s3ProxyClient = &http.Client{
+			Transport: proxyTransport,
+			Timeout:   cfg.HTTPReadTimeout,
+		}
+	}
 	s3dl := s3download.NewDownloader(
 		awsCfg,
 		identity.Region,
 		cfg.S3EndpointOverride,
 		cfg.UseFIPSMode,
+		s3ProxyClient,
 		logger,
 	)
 
-	ghDl := githubdownload.NewDownloader(logger)
+	ghDl := githubdownload.NewDownloader(proxyTransport, logger)
 	unpacker := archive.NewUnpacker()
 	fileOp := filesystem.NewOperator()
 	sr := scriptrunner.NewRunner(logger)
@@ -147,7 +190,7 @@ type agentIdentity struct {
 	CredentialsFile string
 }
 
-func resolveIdentity(ctx context.Context, cfg config.Agent, logger *slog.Logger) (agentIdentity, error) {
+func resolveIdentity(ctx context.Context, cfg config.Agent, transport http.RoundTripper, logger *slog.Logger) (agentIdentity, error) {
 	// Check environment overrides first
 	region := os.Getenv("AWS_REGION")
 	hostID := os.Getenv("AWS_HOST_IDENTIFIER")
@@ -185,8 +228,28 @@ func resolveIdentity(ctx context.Context, cfg config.Agent, logger *slog.Logger)
 		}
 	}
 
-	// Fall back to IMDS
-	imdsClient := imds.NewClient(cfg.DisableIMDSv1, logger)
+	// Fall back to IMDS with a single retry.
+	// On freshly launched EC2 instances IMDS may be momentarily unavailable
+	// while the network stack initializes.
+	id, err := resolveIMDS(ctx, cfg, transport, region, hostID, logger)
+	if err != nil {
+		logger.Warn("IMDS identity resolution failed, retrying after 5s", "error", err)
+		select {
+		case <-ctx.Done():
+			return agentIdentity{}, ctx.Err()
+		case <-time.After(5 * time.Second):
+		}
+		id, err = resolveIMDS(ctx, cfg, transport, region, hostID, logger)
+		if err != nil {
+			return agentIdentity{}, err
+		}
+	}
+	return id, nil
+}
+
+// resolveIMDS performs a single IMDS identity resolution attempt.
+func resolveIMDS(ctx context.Context, cfg config.Agent, transport http.RoundTripper, region, hostID string, logger *slog.Logger) (agentIdentity, error) {
+	imdsClient := imds.NewClient(cfg.DisableIMDSv1, transport, logger)
 
 	if region == "" {
 		r, err := imdsClient.Region(ctx)
