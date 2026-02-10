@@ -1,6 +1,6 @@
 #!/bin/bash
 # Integration test runner for the Go CodeDeploy agent.
-# Deploys the agent to 5 EC2 instances (AL2023, AL2, Ubuntu, RHEL9, Windows),
+# Deploys the agent to 4 EC2 instances (AL2023, AL2, Ubuntu, Windows),
 # triggers CodeDeploy deployments, and verifies lifecycle hook execution.
 #
 # Commands:
@@ -12,7 +12,7 @@
 # Optional environment variables:
 #   CDAGENT_STACK_PREFIX  - CloudFormation stack prefix (default: cdagent-integ)
 #   AWS_DEFAULT_REGION    - AWS region (default: us-east-1)
-#   RHEL9_AMI_ID          - Override RHEL 9 AMI (default: latest from ec2 describe-images)
+
 
 set -euo pipefail
 
@@ -27,8 +27,8 @@ STACK_PREFIX="${CDAGENT_STACK_PREFIX:-cdagent-integ}"
 STACK_NAME="${STACK_PREFIX}"
 REGION="${AWS_DEFAULT_REGION:-us-east-1}"
 
-OS_NAMES=(al2023 al2 ubuntu rhel9 windows)
-LINUX_OS_NAMES=(al2023 al2 ubuntu rhel9)
+OS_NAMES=(al2023 al2 ubuntu windows)
+LINUX_OS_NAMES=(al2023 al2 ubuntu)
 
 # First-deployment hooks: ApplicationStop is skipped because no prior revision exists.
 # BeforeBlockTraffic, AfterBlockTraffic, BeforeAllowTraffic, AfterAllowTraffic are
@@ -63,34 +63,6 @@ build_binaries() {
 # Infrastructure
 # ---------------------------------------------------------------------------
 
-# Resolve the latest RHEL 9 x86_64 HVM AMI from Red Hat's account.
-# RHEL does not publish AMI IDs to SSM Parameter Store, so we query
-# ec2 describe-images and sort by creation date.
-resolve_rhel9_ami() {
-    if [[ -n "${RHEL9_AMI_ID:-}" ]]; then
-        log "Using provided RHEL9_AMI_ID=${RHEL9_AMI_ID}"
-        return
-    fi
-
-    log "Resolving latest RHEL 9 AMI for ${REGION}"
-    RHEL9_AMI_ID=$(aws ec2 describe-images \
-        --owners 309956199498 \
-        --filters \
-            "Name=name,Values=RHEL-9.*_HVM-*-x86_64-*" \
-            "Name=architecture,Values=x86_64" \
-            "Name=state,Values=available" \
-        --query "sort_by(Images, &CreationDate)[-1].ImageId" \
-        --region "${REGION}" \
-        --output text)
-
-    if [[ -z "${RHEL9_AMI_ID}" || "${RHEL9_AMI_ID}" == "None" ]]; then
-        err "Could not resolve RHEL 9 AMI in ${REGION}. Set RHEL9_AMI_ID manually."
-        return 1
-    fi
-
-    log "Resolved RHEL9_AMI_ID=${RHEL9_AMI_ID}"
-}
-
 resolve_default_vpc() {
     if [[ -n "${VPC_ID:-}" ]]; then
         log "Using provided VPC_ID=${VPC_ID}"
@@ -113,7 +85,6 @@ resolve_default_vpc() {
 }
 
 create_stack() {
-    resolve_rhel9_ami
     resolve_default_vpc
 
     # Delete any pre-existing stack so create-stack does not collide.
@@ -137,7 +108,6 @@ create_stack() {
         --capabilities CAPABILITY_NAMED_IAM \
         --parameters \
             "ParameterKey=StackPrefix,ParameterValue=${STACK_PREFIX}" \
-            "ParameterKey=Rhel9AmiId,ParameterValue=${RHEL9_AMI_ID}" \
             "ParameterKey=VpcId,ParameterValue=${VPC_ID}" \
         --region "${REGION}"
 
@@ -164,13 +134,11 @@ load_stack_outputs() {
     INSTANCE_ID_AL2023=$(echo "${outputs}" | grep -w "InstanceIdAl2023" | awk '{print $NF}')
     INSTANCE_ID_AL2=$(echo "${outputs}" | grep -w "InstanceIdAl2" | awk '{print $NF}')
     INSTANCE_ID_UBUNTU=$(echo "${outputs}" | grep -w "InstanceIdUbuntu" | awk '{print $NF}')
-    INSTANCE_ID_RHEL9=$(echo "${outputs}" | grep -w "InstanceIdRhel9" | awk '{print $NF}')
     INSTANCE_ID_WINDOWS=$(echo "${outputs}" | grep -w "InstanceIdWindows" | awk '{print $NF}')
 
     DG_AL2023=$(echo "${outputs}" | grep -w "DgAl2023Name" | awk '{print $NF}')
     DG_AL2=$(echo "${outputs}" | grep -w "DgAl2Name" | awk '{print $NF}')
     DG_UBUNTU=$(echo "${outputs}" | grep -w "DgUbuntuName" | awk '{print $NF}')
-    DG_RHEL9=$(echo "${outputs}" | grep -w "DgRhel9Name" | awk '{print $NF}')
     DG_WINDOWS=$(echo "${outputs}" | grep -w "DgWindowsName" | awk '{print $NF}')
 
     log "Bucket=${BUCKET} App=${CODEDEPLOY_APP}"
@@ -306,7 +274,7 @@ install_agent_linux() {
     local instance_id="$1"
     log "Installing agent on Linux instance ${instance_id}"
 
-    # Install AWS CLI v2 if missing (Ubuntu and RHEL 9 do not ship with it; Amazon Linux does).
+    # Install AWS CLI v2 if missing (Ubuntu does not ship with it; Amazon Linux does).
     run_ssm_command "${instance_id}" "AWS-RunShellScript" \
         "commands=[
             'command -v aws >/dev/null || (curl -fsSL \"https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip\" -o /tmp/awscliv2.zip && cd /tmp && unzip -qo awscliv2.zip && ./aws/install)',
@@ -340,7 +308,6 @@ get_instance_id() {
         al2023)  echo "${INSTANCE_ID_AL2023}" ;;
         al2)     echo "${INSTANCE_ID_AL2}" ;;
         ubuntu)  echo "${INSTANCE_ID_UBUNTU}" ;;
-        rhel9)   echo "${INSTANCE_ID_RHEL9}" ;;
         windows) echo "${INSTANCE_ID_WINDOWS}" ;;
     esac
 }
@@ -351,7 +318,6 @@ get_dg_name() {
         al2023)  echo "${DG_AL2023}" ;;
         al2)     echo "${DG_AL2}" ;;
         ubuntu)  echo "${DG_UBUNTU}" ;;
-        rhel9)   echo "${DG_RHEL9}" ;;
         windows) echo "${DG_WINDOWS}" ;;
     esac
 }

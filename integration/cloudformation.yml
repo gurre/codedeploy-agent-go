@@ -1,7 +1,7 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Description: >
   EC2 integration test infrastructure for the Go CodeDeploy agent.
-  Deploys 5 instances (AL2023, AL2, Ubuntu 22.04, RHEL 9, Windows Server 2022),
+  Deploys 4 instances (AL2023, AL2, Ubuntu 22.04, Windows Server 2022),
   IAM roles, an S3 bundle bucket, and CodeDeploy application with per-OS deployment groups.
 
 Parameters:
@@ -29,10 +29,6 @@ Parameters:
     Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
     Default: /aws/service/canonical/ubuntu/server/22.04/stable/current/amd64/hvm/ebs-gp2/ami-id
     Description: Ubuntu 22.04 AMI.
-
-  Rhel9AmiId:
-    Type: String
-    Description: RHEL 9 AMI ID. Resolved by run.sh via ec2 describe-images (Red Hat does not publish to SSM Parameter Store).
 
   WindowsAmiId:
     Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
@@ -191,36 +187,6 @@ Resources:
           wait_between_runs: 5
           CONF
 
-  InstanceRhel9:
-    Type: AWS::EC2::Instance
-    Properties:
-      ImageId: !Ref Rhel9AmiId
-      InstanceType: !Ref InstanceType
-      IamInstanceProfile: !Ref InstanceProfile
-      SecurityGroupIds:
-        - !Ref SecurityGroup
-      Tags:
-        - Key: Name
-          Value: !Sub "${StackPrefix}-rhel9"
-        - Key: os-name
-          Value: rhel9
-        - Key: codedeploy-group
-          Value: !Ref StackPrefix
-      UserData:
-        Fn::Base64: !Sub |
-          #!/bin/bash
-          set -euo pipefail
-          dnf install -y amazon-ssm-agent
-          systemctl enable amazon-ssm-agent
-          systemctl start amazon-ssm-agent
-          mkdir -p /opt/codedeploy-agent/bin
-          mkdir -p /opt/codedeploy-agent/deployment-root
-          mkdir -p /var/log/aws/codedeploy-agent
-          mkdir -p /etc/codedeploy-agent/conf
-          cat > /etc/codedeploy-agent/conf/codedeployagent.yml <<'CONF'
-          wait_between_runs: 5
-          CONF
-
   InstanceWindows:
     Type: AWS::EC2::Instance
     Properties:
@@ -304,21 +270,6 @@ Resources:
           Value: !Ref StackPrefix
           Type: KEY_AND_VALUE
 
-  DgRhel9:
-    Type: AWS::CodeDeploy::DeploymentGroup
-    Properties:
-      ApplicationName: !Ref CodeDeployApp
-      DeploymentGroupName: !Sub "${StackPrefix}-rhel9"
-      ServiceRoleArn: !GetAtt DeploymentRole.Arn
-      DeploymentConfigName: CodeDeployDefault.AllAtOnce
-      Ec2TagFilters:
-        - Key: os-name
-          Value: rhel9
-          Type: KEY_AND_VALUE
-        - Key: codedeploy-group
-          Value: !Ref StackPrefix
-          Type: KEY_AND_VALUE
-
   DgWindows:
     Type: AWS::CodeDeploy::DeploymentGroup
     Properties:
@@ -345,8 +296,6 @@ Outputs:
     Value: !Ref InstanceAl2
   InstanceIdUbuntu:
     Value: !Ref InstanceUbuntu
-  InstanceIdRhel9:
-    Value: !Ref InstanceRhel9
   InstanceIdWindows:
     Value: !Ref InstanceWindows
   DgAl2023Name:
@@ -355,7 +304,5 @@ Outputs:
     Value: !Sub "${StackPrefix}-al2"
   DgUbuntuName:
     Value: !Sub "${StackPrefix}-ubuntu"
-  DgRhel9Name:
-    Value: !Sub "${StackPrefix}-rhel9"
   DgWindowsName:
     Value: !Sub "${StackPrefix}-windows"

@@ -1,13 +1,12 @@
 # Integration Tests
 
-EC2-based integration tests for the Go CodeDeploy agent. Verifies the agent can resolve identity via IMDS, poll for commands, download bundles from S3, install files, and execute lifecycle hook scripts on all 5 supported platforms.
+EC2-based integration tests for the Go CodeDeploy agent. Verifies the agent can resolve identity via IMDS, poll for commands, download bundles from S3, install files, and execute lifecycle hook scripts on all 4 supported platforms.
 
 ## Platforms
 
 - Amazon Linux 2023
 - Amazon Linux 2
 - Ubuntu 22.04
-- RHEL 9
 - Windows Server 2022
 
 ## Prerequisites
@@ -22,7 +21,6 @@ EC2-based integration tests for the Go CodeDeploy agent. Verifies the agent can 
 |----------|---------|---------|
 | `CDAGENT_STACK_PREFIX` | `cdagent-integ` | CloudFormation stack and resource name prefix |
 | `AWS_DEFAULT_REGION` | `us-east-1` | AWS region for all resources |
-| `RHEL9_AMI_ID` | latest via `ec2 describe-images` | Override the auto-resolved RHEL 9 AMI |
 
 ## Commands
 
@@ -35,7 +33,7 @@ EC2-based integration tests for the Go CodeDeploy agent. Verifies the agent can 
 
 ## How It Works
 
-1. **Setup** cross-compiles `cmd/codedeploy-agent` for `linux/amd64` and `windows/amd64`, creates a CloudFormation stack with 5 EC2 instances, uploads binaries and bundle ZIPs to S3, and installs the agent on each instance via SSM Run Command.
+1. **Setup** cross-compiles `cmd/codedeploy-agent` for `linux/amd64` and `windows/amd64`, creates a CloudFormation stack with 4 EC2 instances, uploads binaries and bundle ZIPs to S3, and installs the agent on each instance via SSM Run Command.
 
 2. **Test** creates one CodeDeploy deployment per OS (each deployment group targets a single instance by EC2 tags). On first deployment, CodeDeploy executes 4 of the 9 lifecycle hooks — `BeforeInstall`, `AfterInstall`, `ApplicationStart`, `ValidateService`. The remaining hooks are skipped for two reasons: `ApplicationStop` is skipped because no prior revision exists, and the traffic hooks (`BeforeBlockTraffic`, `AfterBlockTraffic`, `BeforeAllowTraffic`, `AfterAllowTraffic`) are skipped because no load balancer is attached to the deployment group. Each hook script appends its event name to a proof file. The runner reads the proof file via SSM and checks for the expected events.
 
@@ -47,7 +45,7 @@ Instances are provisioned with `codedeployagent.yml` containing `wait_between_ru
 
 ## CloudFormation Parameters
 
-See `cloudformation.yml` Parameters section. All AMI parameters except `Rhel9AmiId` resolve via SSM Parameter Store. The `InstanceType` defaults to `t3.micro`.
+See `cloudformation.yml` Parameters section. All AMI parameters resolve via SSM Parameter Store. The `InstanceType` defaults to `t3.micro`.
 
 ## Troubleshooting
 

@@ -8,7 +8,15 @@ before:
 builds:
   - id: codedeploy-agent
     main: ./cmd/codedeploy-agent
-    binary: codedeploy-agent
+    binary: >-
+      codedeploy-agent_
+      {{- replace .Version "." "-" }}_
+      {{- .Os }}_
+      {{- if eq .Arch "amd64" }}x86_64
+      {{- else if eq .Arch "386" }}i386
+      {{- else }}{{ .Arch }}{{ end }}
+      {{- if .Arm }}v{{ .Arm }}{{ end }}
+    no_unique_dist_dir: true
     env:
       - CGO_ENABLED=0
     goos:
@@ -36,7 +44,15 @@ builds:
 
   - id: codedeploy-local
     main: ./cmd/codedeploy-local
-    binary: codedeploy-local
+    binary: >-
+      codedeploy-local_
+      {{- replace .Version "." "-" }}_
+      {{- .Os }}_
+      {{- if eq .Arch "amd64" }}x86_64
+      {{- else if eq .Arch "386" }}i386
+      {{- else }}{{ .Arch }}{{ end }}
+      {{- if .Arm }}v{{ .Arm }}{{ end }}
+    no_unique_dist_dir: true
     env:
       - CGO_ENABLED=0
     goos:
@@ -50,38 +66,13 @@ builds:
     ldflags:
       - -s -w
 
-# Compressed archives per build
 archives:
-  - id: compressed
-    ids:
-      - codedeploy-agent
-      - codedeploy-local
-    formats: [tar.gz]
-    name_template: >-
-      {{ .ProjectName }}_{{ .Version }}_
-      {{- .Os }}_
-      {{- if eq .Arch "amd64" }}x86_64
-      {{- else if eq .Arch "386" }}i386
-      {{- else }}{{ .Arch }}{{ end }}
-      {{- if .Arm }}v{{ .Arm }}{{ end }}
-    allow_different_binary_count: true
-    files:
-      - LICENSE
-      - README.md
-      - init.d/*
-
-  - id: binaries
-    ids:
-      - codedeploy-agent
-      - codedeploy-local
+  - id: agent-binaries
+    ids: [codedeploy-agent]
     formats: [binary]
-    name_template: >-
-      {{ .Binary }}_{{ .Version }}_
-      {{- .Os }}_
-      {{- if eq .Arch "amd64" }}x86_64
-      {{- else if eq .Arch "386" }}i386
-      {{- else }}{{ .Arch }}{{ end }}
-      {{- if .Arm }}v{{ .Arm }}{{ end }}
+  - id: local-binaries
+    ids: [codedeploy-local]
+    formats: [binary]
 
 # Linux packages via nFPM
 nfpms:
@@ -101,6 +92,16 @@ nfpms:
       - archlinux
     bindir: /opt/codedeploy-agent/bin
     contents:
+      - src: >-
+          codedeploy-agent_
+          {{- replace .Version "." "-" }}_
+          {{- .Os }}_
+          {{- if eq .Arch "amd64" }}x86_64
+          {{- else if eq .Arch "386" }}i386
+          {{- else }}{{ .Arch }}{{ end }}
+          {{- if .Arm }}v{{ .Arm }}{{ end }}
+        dst: /opt/codedeploy-agent/bin/codedeploy-agent
+        type: symlink
       - src: init.d/codedeploy-agent.service
         dst: /etc/systemd/system/codedeploy-agent.service
         type: config
