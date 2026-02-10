@@ -136,11 +136,14 @@ Resources:
           CONF
           VERSION="${AgentVersion}"
           VERSION_DASHED=$(echo "$VERSION" | tr '.' '-')
-          curl -fsSLo /opt/codedeploy-agent/bin/codedeploy-agent \
-            "https://github.com/gurre/codedeploy-agent-go/releases/download/v$VERSION/codedeploy-agent_${!VERSION_DASHED}_linux_x86_64"
-          chmod +x /opt/codedeploy-agent/bin/codedeploy-agent
-          nohup /opt/codedeploy-agent/bin/codedeploy-agent /etc/codedeploy-agent/conf/codedeployagent.yml \
-            > /var/log/aws/codedeploy-agent/agent-stdout.log 2>&1 &
+          BINARY=/opt/codedeploy-agent/bin/codedeploy-agent
+          URL="https://github.com/gurre/codedeploy-agent-go/releases/download/v$VERSION/codedeploy-agent_${!VERSION_DASHED}_linux_x86_64"
+          LOGFILE=/var/log/aws/codedeploy-agent/agent-stdout.log
+          echo "Downloading agent from ${!URL}" > "${!LOGFILE}"
+          curl -fsSLo "${!BINARY}" "${!URL}" 2>>"${!LOGFILE}"
+          chmod +x "${!BINARY}"
+          echo "Agent binary downloaded ($(stat -c%s "${!BINARY}") bytes)" >> "${!LOGFILE}"
+          nohup "${!BINARY}" /etc/codedeploy-agent/conf/codedeployagent.yml >> "${!LOGFILE}" 2>&1 &
 
   InstanceAl2:
     Type: AWS::EC2::Instance
@@ -170,11 +173,14 @@ Resources:
           CONF
           VERSION="${AgentVersion}"
           VERSION_DASHED=$(echo "$VERSION" | tr '.' '-')
-          curl -fsSLo /opt/codedeploy-agent/bin/codedeploy-agent \
-            "https://github.com/gurre/codedeploy-agent-go/releases/download/v$VERSION/codedeploy-agent_${!VERSION_DASHED}_linux_x86_64"
-          chmod +x /opt/codedeploy-agent/bin/codedeploy-agent
-          nohup /opt/codedeploy-agent/bin/codedeploy-agent /etc/codedeploy-agent/conf/codedeployagent.yml \
-            > /var/log/aws/codedeploy-agent/agent-stdout.log 2>&1 &
+          BINARY=/opt/codedeploy-agent/bin/codedeploy-agent
+          URL="https://github.com/gurre/codedeploy-agent-go/releases/download/v$VERSION/codedeploy-agent_${!VERSION_DASHED}_linux_x86_64"
+          LOGFILE=/var/log/aws/codedeploy-agent/agent-stdout.log
+          echo "Downloading agent from ${!URL}" > "${!LOGFILE}"
+          curl -fsSLo "${!BINARY}" "${!URL}" 2>>"${!LOGFILE}"
+          chmod +x "${!BINARY}"
+          echo "Agent binary downloaded ($(stat -c%s "${!BINARY}") bytes)" >> "${!LOGFILE}"
+          nohup "${!BINARY}" /etc/codedeploy-agent/conf/codedeployagent.yml >> "${!LOGFILE}" 2>&1 &
 
   InstanceUbuntu:
     Type: AWS::EC2::Instance
@@ -206,11 +212,14 @@ Resources:
           CONF
           VERSION="${AgentVersion}"
           VERSION_DASHED=$(echo "$VERSION" | tr '.' '-')
-          curl -fsSLo /opt/codedeploy-agent/bin/codedeploy-agent \
-            "https://github.com/gurre/codedeploy-agent-go/releases/download/v$VERSION/codedeploy-agent_${!VERSION_DASHED}_linux_x86_64"
-          chmod +x /opt/codedeploy-agent/bin/codedeploy-agent
-          nohup /opt/codedeploy-agent/bin/codedeploy-agent /etc/codedeploy-agent/conf/codedeployagent.yml \
-            > /var/log/aws/codedeploy-agent/agent-stdout.log 2>&1 &
+          BINARY=/opt/codedeploy-agent/bin/codedeploy-agent
+          URL="https://github.com/gurre/codedeploy-agent-go/releases/download/v$VERSION/codedeploy-agent_${!VERSION_DASHED}_linux_x86_64"
+          LOGFILE=/var/log/aws/codedeploy-agent/agent-stdout.log
+          echo "Downloading agent from ${!URL}" > "${!LOGFILE}"
+          curl -fsSLo "${!BINARY}" "${!URL}" 2>>"${!LOGFILE}"
+          chmod +x "${!BINARY}"
+          echo "Agent binary downloaded ($(stat -c%s "${!BINARY}") bytes)" >> "${!LOGFILE}"
+          nohup "${!BINARY}" /etc/codedeploy-agent/conf/codedeployagent.yml >> "${!LOGFILE}" 2>&1 &
 
   InstanceWindows:
     Type: AWS::EC2::Instance
@@ -242,11 +251,16 @@ Resources:
           "@ | Set-Content C:\codedeploy-agent\conf\codedeployagent.yml
           $Version = "${AgentVersion}"
           $VersionDashed = $Version.Replace('.', '-')
-          curl.exe -fsSLo C:\codedeploy-agent\bin\codedeploy-agent.exe `
-            "https://github.com/gurre/codedeploy-agent-go/releases/download/v$Version/codedeploy-agent_${!VersionDashed}_windows_x86_64.exe"
-          Start-Process -FilePath C:\codedeploy-agent\bin\codedeploy-agent.exe `
+          $Binary = "C:\codedeploy-agent\bin\codedeploy-agent.exe"
+          $Url = "https://github.com/gurre/codedeploy-agent-go/releases/download/v$Version/codedeploy-agent_${!VersionDashed}_windows_x86_64.exe"
+          $LogFile = "C:\codedeploy-agent\logs\agent-stdout.log"
+          "Downloading agent from $Url" | Out-File -FilePath $LogFile
+          curl.exe -fsSLo $Binary $Url 2>>$LogFile
+          $Size = (Get-Item $Binary).Length
+          "Agent binary downloaded ($Size bytes)" | Out-File -Append -FilePath $LogFile
+          Start-Process -FilePath $Binary `
             -ArgumentList C:\codedeploy-agent\conf\codedeployagent.yml -WindowStyle Hidden `
-            -RedirectStandardOutput C:\codedeploy-agent\logs\agent-stdout.log `
+            -RedirectStandardOutput C:\codedeploy-agent\logs\agent-run.log `
             -RedirectStandardError C:\codedeploy-agent\logs\agent-stderr.log
           </powershell>
 

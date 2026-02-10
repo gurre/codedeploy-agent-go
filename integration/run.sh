@@ -389,7 +389,7 @@ collect_logs() {
     local agent_log
     if [[ "${os_name}" == "windows" ]]; then
         agent_log=$(run_ssm_command "${instance_id}" "AWS-RunPowerShellScript" \
-            "commands=['Get-Content C:\\codedeploy-agent\\logs\\agent-stdout.log -ErrorAction SilentlyContinue']" 2>/dev/null || echo "(no log)")
+            "commands=['Get-Content C:\\codedeploy-agent\\logs\\agent-stdout.log -ErrorAction SilentlyContinue; Get-Content C:\\codedeploy-agent\\logs\\agent-run.log -ErrorAction SilentlyContinue']" 2>/dev/null || echo "(no log)")
     else
         agent_log=$(run_ssm_command "${instance_id}" "AWS-RunShellScript" \
             "commands=['cat /var/log/aws/codedeploy-agent/agent-stdout.log 2>/dev/null || echo \"(no log)\"']" 2>/dev/null || echo "(no log)")
