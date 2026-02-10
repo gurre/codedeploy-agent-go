@@ -124,17 +124,18 @@ Resources:
         - Key: codedeploy-group
           Value: !Ref StackPrefix
       UserData:
-        Fn::Base64: !Sub |
-          #!/bin/bash
-          set -euo pipefail
-          VERSION="${AgentVersion}"
-          URL="https://github.com/gurre/codedeploy-agent-go/releases/download/v${!VERSION}/codedeploy-agent_${!VERSION}_linux_amd64.rpm"
-          curl -fsSLo /tmp/codedeploy-agent.rpm "${!URL}"
-          dnf install -y /tmp/codedeploy-agent.rpm
-          cat > /etc/codedeploy-agent/conf/codedeployagent.yml <<'CONF'
-          wait_between_runs: 5
-          CONF
-          systemctl enable --now codedeploy-agent
+        Fn::Base64:
+          Fn::Sub: |
+            #!/usr/bin/env bash
+            set -euo pipefail
+            VERSION="${AgentVersion}"
+            URL="https://github.com/gurre/codedeploy-agent-go/releases/download/v$VERSION/codedeploy-agent_${!VERSION}_linux_amd64.rpm"
+            curl -fsSLo /tmp/codedeploy-agent.rpm "$URL"
+            dnf install -y /tmp/codedeploy-agent.rpm
+            cat > /etc/codedeploy-agent/conf/codedeployagent.yml <<'CONF'
+            wait_between_runs: 5
+            CONF
+            systemctl enable --now codedeploy-agent
 
   InstanceAl2:
     Type: AWS::EC2::Instance
@@ -152,17 +153,18 @@ Resources:
         - Key: codedeploy-group
           Value: !Ref StackPrefix
       UserData:
-        Fn::Base64: !Sub |
-          #!/bin/bash
-          set -euo pipefail
-          VERSION="${AgentVersion}"
-          URL="https://github.com/gurre/codedeploy-agent-go/releases/download/v${!VERSION}/codedeploy-agent_${!VERSION}_linux_amd64.rpm"
-          curl -fsSLo /tmp/codedeploy-agent.rpm "${!URL}"
-          yum localinstall -y /tmp/codedeploy-agent.rpm
-          cat > /etc/codedeploy-agent/conf/codedeployagent.yml <<'CONF'
-          wait_between_runs: 5
-          CONF
-          systemctl enable --now codedeploy-agent
+        Fn::Base64:
+          Fn::Sub: |
+            #!/usr/bin/env bash
+            set -euo pipefail
+            VERSION="${AgentVersion}"
+            URL="https://github.com/gurre/codedeploy-agent-go/releases/download/v$VERSION/codedeploy-agent_${!VERSION}_linux_amd64.rpm"
+            curl -fsSLo /tmp/codedeploy-agent.rpm "$URL"
+            yum localinstall -y /tmp/codedeploy-agent.rpm
+            cat > /etc/codedeploy-agent/conf/codedeployagent.yml <<'CONF'
+            wait_between_runs: 5
+            CONF
+            systemctl enable --now codedeploy-agent
 
   InstanceUbuntu:
     Type: AWS::EC2::Instance
@@ -180,19 +182,20 @@ Resources:
         - Key: codedeploy-group
           Value: !Ref StackPrefix
       UserData:
-        Fn::Base64: !Sub |
-          #!/bin/bash
-          set -euo pipefail
-          snap install amazon-ssm-agent --classic
-          snap start amazon-ssm-agent
-          VERSION="${AgentVersion}"
-          URL="https://github.com/gurre/codedeploy-agent-go/releases/download/v${!VERSION}/codedeploy-agent_${!VERSION}_linux_amd64.deb"
-          curl -fsSLo /tmp/codedeploy-agent.deb "${!URL}"
-          dpkg -i /tmp/codedeploy-agent.deb
-          cat > /etc/codedeploy-agent/conf/codedeployagent.yml <<'CONF'
-          wait_between_runs: 5
-          CONF
-          systemctl enable --now codedeploy-agent
+        Fn::Base64:
+          Fn::Sub: |
+            #!/usr/bin/env bash
+            set -euo pipefail
+            snap install amazon-ssm-agent --classic
+            snap start amazon-ssm-agent
+            VERSION="${AgentVersion}"
+            URL="https://github.com/gurre/codedeploy-agent-go/releases/download/v$VERSION/codedeploy-agent_${!VERSION}_linux_amd64.deb"
+            curl -fsSLo /tmp/codedeploy-agent.deb "$URL"
+            dpkg -i /tmp/codedeploy-agent.deb
+            cat > /etc/codedeploy-agent/conf/codedeployagent.yml <<'CONF'
+            wait_between_runs: 5
+            CONF
+            systemctl enable --now codedeploy-agent
 
   InstanceWindows:
     Type: AWS::EC2::Instance
@@ -210,32 +213,33 @@ Resources:
         - Key: codedeploy-group
           Value: !Ref StackPrefix
       UserData:
-        Fn::Base64: !Sub |
-          <powershell>
-          $ErrorActionPreference = "Stop"
-          New-Item -ItemType Directory -Force -Path C:\codedeploy-agent\bin
-          New-Item -ItemType Directory -Force -Path C:\codedeploy-agent\deployment-root
-          New-Item -ItemType Directory -Force -Path C:\codedeploy-agent\logs
-          New-Item -ItemType Directory -Force -Path C:\codedeploy-agent\conf
-          @"
-          root_dir: C:\codedeploy-agent\deployment-root
-          log_dir: C:\codedeploy-agent\logs
-          wait_between_runs: 5
-          "@ | Set-Content C:\codedeploy-agent\conf\codedeployagent.yml
-          $Version = "${AgentVersion}"
-          $VersionDashed = $Version.Replace('.', '-')
-          $Binary = "C:\codedeploy-agent\bin\codedeploy-agent.exe"
-          $Url = "https://github.com/gurre/codedeploy-agent-go/releases/download/v$Version/codedeploy-agent_${!VersionDashed}_windows_x86_64.exe"
-          $LogFile = "C:\codedeploy-agent\logs\agent-stdout.log"
-          "Downloading agent from $Url" | Out-File -FilePath $LogFile
-          curl.exe -fsSLo $Binary $Url 2>>$LogFile
-          $Size = (Get-Item $Binary).Length
-          "Agent binary downloaded ($Size bytes)" | Out-File -Append -FilePath $LogFile
-          Start-Process -FilePath $Binary `
-            -ArgumentList C:\codedeploy-agent\conf\codedeployagent.yml -WindowStyle Hidden `
-            -RedirectStandardOutput C:\codedeploy-agent\logs\agent-run.log `
-            -RedirectStandardError C:\codedeploy-agent\logs\agent-stderr.log
-          </powershell>
+        Fn::Base64:
+          Fn::Sub: |
+            <powershell>
+            $ErrorActionPreference = "Stop"
+            New-Item -ItemType Directory -Force -Path C:\codedeploy-agent\bin
+            New-Item -ItemType Directory -Force -Path C:\codedeploy-agent\deployment-root
+            New-Item -ItemType Directory -Force -Path C:\codedeploy-agent\logs
+            New-Item -ItemType Directory -Force -Path C:\codedeploy-agent\conf
+            @"
+            root_dir: C:\codedeploy-agent\deployment-root
+            log_dir: C:\codedeploy-agent\logs
+            wait_between_runs: 5
+            "@ | Set-Content C:\codedeploy-agent\conf\codedeployagent.yml
+            $Version = "${AgentVersion}"
+            $VersionDashed = $Version.Replace('.', '-')
+            $Binary = "C:\codedeploy-agent\bin\codedeploy-agent.exe"
+            $Url = "https://github.com/gurre/codedeploy-agent-go/releases/download/v$Version/codedeploy-agent_$VersionDashed`_windows_x86_64.exe"
+            $LogFile = "C:\codedeploy-agent\logs\agent-stdout.log"
+            "Downloading agent from $Url" | Out-File -FilePath $LogFile
+            curl.exe -fsSLo $Binary $Url 2>>$LogFile
+            $Size = (Get-Item $Binary).Length
+            "Agent binary downloaded ($Size bytes)" | Out-File -Append -FilePath $LogFile
+            Start-Process -FilePath $Binary `
+              -ArgumentList C:\codedeploy-agent\conf\codedeployagent.yml -WindowStyle Hidden `
+              -RedirectStandardOutput C:\codedeploy-agent\logs\agent-run.log `
+              -RedirectStandardError C:\codedeploy-agent\logs\agent-stderr.log
+            </powershell>
 
   # ---------------------------------------------------------------------------
   # CodeDeploy
