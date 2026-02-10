@@ -4,6 +4,7 @@ package pkcs7
 
 import (
 	_ "embed"
+	"encoding/pem"
 	"fmt"
 
 	gopkcs7 "go.mozilla.org/pkcs7"
@@ -35,8 +36,20 @@ func NewVerifierFromPEM(_ []byte) (*Verifier, error) {
 // The signature is verified against the embedded CA chain.
 // Note: The Ruby agent uses NOVERIFY flag, which verifies the signature
 // structure but not the certificate chain. We match that behavior.
+//
+// The CodeDeploy service returns PEM-encoded PKCS7 (-----BEGIN PKCS7-----).
+// We decode the PEM wrapper to extract DER bytes before parsing.
 func (v *Verifier) Verify(signature []byte) ([]byte, error) {
-	p7, err := gopkcs7.Parse(signature)
+	// Decode PEM format to DER bytes.
+	// The go.mozilla.org/pkcs7.Parse() function requires DER-encoded input,
+	// but CodeDeploy returns PEM-encoded PKCS7 with -----BEGIN PKCS7----- headers.
+	block, _ := pem.Decode(signature)
+	if block == nil {
+		return nil, fmt.Errorf("pkcs7: failed to decode PEM block")
+	}
+
+	// Parse the DER-encoded PKCS7 structure.
+	p7, err := gopkcs7.Parse(block.Bytes)
 	if err != nil {
 		return nil, fmt.Errorf("pkcs7: parse signature: %w", err)
 	}
