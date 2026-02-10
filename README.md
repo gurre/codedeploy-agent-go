@@ -179,8 +179,8 @@ Amazon Linux 2, Ubuntu 22.04, and Windows Server 2022.
 - **AWS credentials** with permissions to create CloudFormation stacks, EC2
   instances, IAM roles/instance profiles, S3 buckets, and CodeDeploy
   applications. The caller must also be able to send SSM Run Commands.
-- **Go toolchain** — the runner cross-compiles `cmd/codedeploy-agent` for
-  `linux/amd64` and `windows/amd64`.
+- **Published GitHub release** matching `CDAGENT_VERSION` — instances download
+  the agent binary from GitHub Releases at boot.
 - **`zip`** — used to package the test bundles.
 
 ### What It Creates
@@ -190,7 +190,7 @@ that provisions:
 
 - 1 IAM role + instance profile (SSM and S3 read access for the instances)
 - 1 IAM service role for CodeDeploy
-- 1 S3 bucket for agent binaries and deployment bundles
+- 1 S3 bucket for deployment bundles
 - 4 EC2 instances (one per OS), egress-only security group, no SSH
 - 1 CodeDeploy application with 4 deployment groups (one per instance, matched
   by EC2 tags)
@@ -201,7 +201,7 @@ All resources are prefixed with `CDAGENT_STACK_PREFIX` (default
 ### Running
 
 ```
-./integration/run.sh all
+CDAGENT_VERSION=0.1.0 ./integration/run.sh all
 ```
 
 This runs `setup` → `test` → `teardown` in sequence. Teardown runs even if

@@ -12,28 +12,29 @@ EC2-based integration tests for the Go CodeDeploy agent. Verifies the agent can 
 ## Prerequisites
 
 - AWS CLI v2 configured with credentials that can create CloudFormation stacks, EC2 instances, IAM roles, S3 buckets, and CodeDeploy resources
-- Go toolchain (for cross-compilation)
+- Published GitHub release matching `CDAGENT_VERSION` (instances download the binary at boot)
 - `zip` command
 
 ## Environment Variables
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
+| `CDAGENT_VERSION` | *(required)* | Agent release version to download from GitHub Releases |
 | `CDAGENT_STACK_PREFIX` | `cdagent-integ` | CloudFormation stack and resource name prefix |
 | `AWS_DEFAULT_REGION` | `us-east-1` | AWS region for all resources |
 
 ## Commands
 
 ```
-./integration/run.sh setup     # Build, create stack, upload, install agent
-./integration/run.sh test      # Deploy bundles, verify hook execution
-./integration/run.sh teardown  # Empty bucket, delete stack
-./integration/run.sh all       # setup -> test -> teardown (teardown always runs)
+CDAGENT_VERSION=0.1.0 ./integration/run.sh setup     # Create stack, upload bundles
+CDAGENT_VERSION=0.1.0 ./integration/run.sh test      # Deploy bundles, verify hook execution
+CDAGENT_VERSION=0.1.0 ./integration/run.sh teardown  # Empty bucket, delete stack
+CDAGENT_VERSION=0.1.0 ./integration/run.sh all       # setup -> test -> teardown (teardown always runs)
 ```
 
 ## How It Works
 
-1. **Setup** cross-compiles `cmd/codedeploy-agent` for `linux/amd64` and `windows/amd64`, creates a CloudFormation stack with 4 EC2 instances, uploads binaries and bundle ZIPs to S3, and installs the agent on each instance via SSM Run Command.
+1. **Setup** creates a CloudFormation stack with 4 EC2 instances. Each instance downloads the agent binary from GitHub Releases via UserData at boot. The runner uploads deployment bundle ZIPs to S3.
 
 2. **Test** creates one CodeDeploy deployment per OS (each deployment group targets a single instance by EC2 tags). On first deployment, CodeDeploy executes 4 of the 9 lifecycle hooks — `BeforeInstall`, `AfterInstall`, `ApplicationStart`, `ValidateService`. The remaining hooks are skipped for two reasons: `ApplicationStop` is skipped because no prior revision exists, and the traffic hooks (`BeforeBlockTraffic`, `AfterBlockTraffic`, `BeforeAllowTraffic`, `AfterAllowTraffic`) are skipped because no load balancer is attached to the deployment group. Each hook script appends its event name to a proof file. The runner reads the proof file via SSM and checks for the expected events.
 

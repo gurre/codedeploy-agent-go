@@ -1,13 +1,17 @@
 #!/bin/bash
 # Integration test runner for the Go CodeDeploy agent.
-# Deploys the agent to 4 EC2 instances (AL2023, AL2, Ubuntu, Windows),
+# Instances download the agent binary from GitHub Releases at boot via UserData.
+# The runner creates infrastructure, uploads deployment bundles to S3,
 # triggers CodeDeploy deployments, and verifies lifecycle hook execution.
 #
 # Commands:
-#   setup    - Build binaries, create CloudFormation stack, upload artifacts, install agent
+#   setup    - Create CloudFormation stack, upload deployment bundles
 #   test     - Create deployments, wait for completion, verify hook execution
 #   teardown - Empty S3 bucket, delete CloudFormation stack
 #   all      - setup -> test -> teardown (teardown runs even if test fails)
+#
+# Required environment variables:
+#   CDAGENT_VERSION       - Agent release version (e.g. 0.1.0)
 #
 # Optional environment variables:
 #   CDAGENT_STACK_PREFIX  - CloudFormation stack prefix (default: cdagent-integ)
@@ -21,14 +25,14 @@ export AWS_PAGER=""
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 TMP_DIR="${REPO_DIR}/tmp"
-BIN_DIR="${REPO_DIR}/bin"
+
+AGENT_VERSION="${CDAGENT_VERSION:?CDAGENT_VERSION must be set (e.g. 0.1.0)}"
 
 STACK_PREFIX="${CDAGENT_STACK_PREFIX:-cdagent-integ}"
 STACK_NAME="${STACK_PREFIX}"
 REGION="${AWS_DEFAULT_REGION:-us-east-1}"
 
 OS_NAMES=(al2023 al2 ubuntu windows)
-LINUX_OS_NAMES=(al2023 al2 ubuntu)
 
 # First-deployment hooks: ApplicationStop is skipped because no prior revision exists.
 # BeforeBlockTraffic, AfterBlockTraffic, BeforeAllowTraffic, AfterAllowTraffic are
@@ -43,21 +47,6 @@ TEST_RESULTS=()
 # ---------------------------------------------------------------------------
 log() { echo "==> $*"; }
 err() { echo "ERR $*" >&2; }
-
-# ---------------------------------------------------------------------------
-# Build
-# ---------------------------------------------------------------------------
-build_binaries() {
-    log "Building linux/amd64 binary"
-    CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
-        go build -o "${BIN_DIR}/codedeploy-agent-linux-amd64" \
-        "${REPO_DIR}/cmd/codedeploy-agent"
-
-    log "Building windows/amd64 binary"
-    CGO_ENABLED=0 GOOS=windows GOARCH=amd64 \
-        go build -o "${BIN_DIR}/codedeploy-agent-windows-amd64.exe" \
-        "${REPO_DIR}/cmd/codedeploy-agent"
-}
 
 # ---------------------------------------------------------------------------
 # Infrastructure
@@ -109,6 +98,7 @@ create_stack() {
         --parameters \
             "ParameterKey=StackPrefix,ParameterValue=${STACK_PREFIX}" \
             "ParameterKey=VpcId,ParameterValue=${VPC_ID}" \
+            "ParameterKey=AgentVersion,ParameterValue=${AGENT_VERSION}" \
         --region "${REGION}"
 
     log "Waiting for stack creation to complete"
@@ -162,15 +152,9 @@ delete_stack() {
 }
 
 # ---------------------------------------------------------------------------
-# Artifacts
+# Bundles
 # ---------------------------------------------------------------------------
-upload_artifacts() {
-    log "Uploading agent binaries to S3"
-    aws s3 cp "${BIN_DIR}/codedeploy-agent-linux-amd64" \
-        "s3://${BUCKET}/agent/codedeploy-agent-linux-amd64" --region "${REGION}"
-    aws s3 cp "${BIN_DIR}/codedeploy-agent-windows-amd64.exe" \
-        "s3://${BUCKET}/agent/codedeploy-agent-windows-amd64.exe" --region "${REGION}"
-
+upload_bundles() {
     log "Creating and uploading bundle ZIPs"
     mkdir -p "${TMP_DIR}"
 
@@ -265,38 +249,6 @@ run_ssm_command() {
         --region "${REGION}" \
         --query "StandardOutputContent" \
         --output text
-}
-
-# ---------------------------------------------------------------------------
-# Agent installation
-# ---------------------------------------------------------------------------
-install_agent_linux() {
-    local instance_id="$1"
-    log "Installing agent on Linux instance ${instance_id}"
-
-    # Install AWS CLI v2 if missing (Ubuntu does not ship with it; Amazon Linux does).
-    run_ssm_command "${instance_id}" "AWS-RunShellScript" \
-        "commands=[
-            'command -v aws >/dev/null || (curl -fsSL \"https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip\" -o /tmp/awscliv2.zip && cd /tmp && unzip -qo awscliv2.zip && ./aws/install)',
-            'aws s3 cp s3://${BUCKET}/agent/codedeploy-agent-linux-amd64 /opt/codedeploy-agent/bin/codedeploy-agent --region ${REGION}',
-            'chmod +x /opt/codedeploy-agent/bin/codedeploy-agent',
-            'nohup /opt/codedeploy-agent/bin/codedeploy-agent /etc/codedeploy-agent/conf/codedeployagent.yml > /var/log/aws/codedeploy-agent/agent-stdout.log 2>&1 &',
-            'sleep 2',
-            'pgrep -f codedeploy-agent || (echo AGENT_NOT_RUNNING && exit 1)'
-        ]"
-}
-
-install_agent_windows() {
-    local instance_id="$1"
-    log "Installing agent on Windows instance ${instance_id}"
-
-    run_ssm_command "${instance_id}" "AWS-RunPowerShellScript" \
-        "commands=[
-            'Read-S3Object -BucketName ${BUCKET} -Key agent/codedeploy-agent-windows-amd64.exe -File C:\\codedeploy-agent\\bin\\codedeploy-agent.exe -Region ${REGION}',
-            'Start-Process -FilePath C:\\codedeploy-agent\\bin\\codedeploy-agent.exe -ArgumentList C:\\codedeploy-agent\\conf\\codedeployagent.yml -WindowStyle Hidden -RedirectStandardOutput C:\\codedeploy-agent\\logs\\agent-stdout.log -RedirectStandardError C:\\codedeploy-agent\\logs\\agent-stderr.log',
-            'Start-Sleep -Seconds 2',
-            'if (-not (Get-Process codedeploy-agent -ErrorAction SilentlyContinue)) { Write-Error \"AGENT_NOT_RUNNING\"; exit 1 }'
-        ]"
 }
 
 # ---------------------------------------------------------------------------
@@ -451,10 +403,9 @@ collect_logs() {
 # Phase orchestration
 # ---------------------------------------------------------------------------
 do_setup() {
-    build_binaries
     create_stack
     load_stack_outputs
-    upload_artifacts
+    upload_bundles
 
     log "Waiting for SSM on all instances"
     for os_name in "${OS_NAMES[@]}"; do
@@ -462,16 +413,6 @@ do_setup() {
         iid=$(get_instance_id "${os_name}")
         wait_for_ssm "${iid}"
     done
-
-    log "Installing agent on Linux instances"
-    for os_name in "${LINUX_OS_NAMES[@]}"; do
-        local iid
-        iid=$(get_instance_id "${os_name}")
-        install_agent_linux "${iid}"
-    done
-
-    log "Installing agent on Windows instance"
-    install_agent_windows "${INSTANCE_ID_WINDOWS}"
 
     log "Sleeping 30s for CodeDeploy agent registration"
     sleep 30
