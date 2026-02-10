@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -339,6 +340,96 @@ func TestRun_GracefulShutdown(t *testing.T) {
 		t.Fatal("Run did not return after context cancellation")
 	}
 }
+
+// TestRun_ErrorCountResets verifies that the consecutive error counter resets
+// after a successful poll. Sequence: fail, fail, succeed, fail, then block.
+// If the counter did not reset after the success, the fourth call would see
+// consecutiveErrors=2 (escalated). With 500ms base, count=2 gives 1s-2s backoff.
+// Without reset, cumulative backoff for calls 1+2+4 ranges [1.75s, 3.5s] — the
+// upper half exceeds the 3s timeout, catching regressions probabilistically (~75%).
+// With reset, the fourth call sees count=0 ([250ms, 500ms]) and finishes in time.
+func TestRun_ErrorCountResets(t *testing.T) {
+	var callCount atomic.Int32
+	doneCh := make(chan struct{}, 1)
+
+	svc := &stubCommandService{
+		pollFunc: func(ctx context.Context, _ string) (*HostCommand, error) {
+			n := callCount.Add(1)
+			switch n {
+			case 1, 2:
+				return nil, fmt.Errorf("transient error")
+			case 3:
+				// Success resets the counter
+				return nil, nil
+			case 4:
+				// After reset, this is consecutiveErrors=0
+				doneCh <- struct{}{}
+				return nil, fmt.Errorf("another error")
+			default:
+				<-ctx.Done()
+				return nil, ctx.Err()
+			}
+		},
+	}
+
+	// 500ms base makes the distinction between reset and non-reset observable:
+	// Without reset, count=2 → backoff in [1s, 2s], cumulative range [1.75s, 3.5s].
+	// With reset, count=0 → backoff in [250ms, 500ms], all four polls finish in ~2s.
+	p := NewPoller(svc, nil, nil, &stubDeploymentTracker{}, "i-host",
+		time.Millisecond, 500*time.Millisecond, time.Second, slog.Default())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go func() { _ = p.Run(ctx) }()
+
+	select {
+	case <-doneCh:
+		// Fourth poll was reached — counter was reset after success
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for fourth poll call — counter may not have reset")
+	}
+
+	cancel()
+}
+
+// TestComputeBackoff_Throttle verifies that errors implementing IsThrottle()
+// produce the fixed 60-second throttle delay instead of exponential backoff.
+// This tests the dependency-inverted throttle detection via the local throttler interface.
+func TestComputeBackoff_Throttle(t *testing.T) {
+	p := NewPoller(nil, nil, nil, nil, "",
+		time.Millisecond, 30*time.Second, time.Second, slog.Default())
+
+	err := &throttleError{msg: "Throttling: Rate exceeded"}
+	delay := p.computeBackoff(err)
+	if delay < 60*time.Second {
+		t.Errorf("throttle backoff = %v, want >= 60s", delay)
+	}
+}
+
+// TestComputeBackoff_NonThrottle verifies that non-throttle errors use
+// exponential backoff from the backoff package rather than the fixed
+// throttle delay.
+func TestComputeBackoff_NonThrottle(t *testing.T) {
+	p := NewPoller(nil, nil, nil, nil, "",
+		time.Millisecond, 30*time.Second, time.Second, slog.Default())
+	p.consecutiveErrors = 0
+
+	err := fmt.Errorf("some network error")
+	delay := p.computeBackoff(err)
+	// count=0 with 30s base: should be in [15s, 30s]
+	if delay < 15*time.Second || delay > 30*time.Second {
+		t.Errorf("non-throttle backoff = %v, want in [15s, 30s]", delay)
+	}
+}
+
+// throttleError is a test double that implements the throttler interface.
+type throttleError struct {
+	msg string
+}
+
+func (e *throttleError) Error() string    { return e.msg }
+func (e *throttleError) IsThrottle() bool { return true }
 
 // --- Test doubles (stubs) ---
 // Placed at the end of the file per project convention.

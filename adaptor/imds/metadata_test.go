@@ -387,6 +387,43 @@ func TestNon200StatusReturnsError(t *testing.T) {
 	}
 }
 
+// TestTokenRefreshOn401_NoInfiniteLoop verifies that when IMDS always returns
+// 401, the client makes a bounded number of token PUT requests and returns an
+// error rather than recursing infinitely. Before the fix, doGet called itself
+// on 401 with no depth limit, risking stack overflow. This test would hang
+// or OOM under the old recursive implementation.
+func TestTokenRefreshOn401_NoInfiniteLoop(t *testing.T) {
+	var tokenPUTs atomic.Int32
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("PUT "+tokenPath, func(w http.ResponseWriter, _ *http.Request) {
+		tokenPUTs.Add(1)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("always-stale-token"))
+	})
+	mux.HandleFunc("GET "+identityPath, func(w http.ResponseWriter, _ *http.Request) {
+		// Always return 401 to trigger token refresh path
+		w.WriteHeader(http.StatusUnauthorized)
+	})
+
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL, false)
+	_, err := client.IdentityDocument(context.Background())
+	if err == nil {
+		t.Fatal("expected error when IMDS always returns 401")
+	}
+
+	// With the non-recursive fix: initial token + 1 refresh per get() attempt.
+	// maxRetries=2 → 3 attempts × (1 initial + 1 refresh) = up to 6 PUTs.
+	// The old recursive version would have made hundreds before stack overflow.
+	puts := tokenPUTs.Load()
+	if puts > 10 {
+		t.Fatalf("token PUT count = %d, expected bounded (<=10) — possible infinite loop", puts)
+	}
+}
+
 // TestDomain_ChinaPartition verifies the Domain accessor works with non-standard
 // domains. This test exists because the agent must support aws-cn and gov partitions
 // where the domain differs from the standard amazonaws.com.

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -114,6 +115,25 @@ func (e *ServiceError) IsClientError() bool {
 // IsServerError returns true for 5xx errors (server's fault).
 func (e *ServiceError) IsServerError() bool {
 	return e.StatusCode >= 500
+}
+
+// IsThrottle returns true when the service signals rate limiting.
+// Detects HTTP 429 status or "throttl"/"rateexceeded" in the error type or message,
+// matching the Ruby CodeDeploy agent's throttle detection logic.
+// The Type field is checked because the service sends throttle errors as
+// {"__type": "ThrottlingException", "message": "Rate exceeded"} which would
+// be missed by message-only matching.
+//
+//	var svcErr *ServiceError
+//	if errors.As(err, &svcErr) && svcErr.IsThrottle() {
+//	    time.Sleep(backoff.ThrottleDelay)
+//	}
+func (e *ServiceError) IsThrottle() bool {
+	if e.StatusCode == http.StatusTooManyRequests {
+		return true
+	}
+	lower := strings.ToLower(e.Type + " " + e.Message)
+	return strings.Contains(lower, "throttl") || strings.Contains(lower, "rateexceeded")
 }
 
 func hashPayload(payload []byte) string {

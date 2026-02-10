@@ -2,6 +2,20 @@
 
 Platform: Apple M4 Pro, darwin/arm64, Go 1.25.2
 
+## 2026-02-10 Retry storm prevention benchmarks
+
+Changes: Added `logic/backoff` package with jittered exponential backoff. Pure computation — no I/O.
+
+### logic/backoff
+
+| Benchmark         | ops       | ns/op | B/op | allocs/op |
+| ----------------- | --------- | ----- | ---- | --------- |
+| BenchmarkDuration | 257761969 | 4.508 | 0    | 0         |
+
+Zero allocations. Single `rand.Int64N` call + bit shift. Called on every poll error so allocation-free is important.
+
+Memory profile: all allocations from `runtime.allocm` (goroutine scheduling), zero from `backoff.Duration`.
+
 ## 2026-02-10 Self-install reconciliation benchmarks
 
 Changes: Added `logic/selfinstall` package with declarative reconciliation for the `codedeploy-install` binary. Pure computation — no I/O.

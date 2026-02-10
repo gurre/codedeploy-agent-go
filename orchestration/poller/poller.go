@@ -4,16 +4,27 @@ package poller
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
 	"time"
 
+	"github.com/gurre/codedeploy-agent-go/logic/backoff"
 	"github.com/gurre/codedeploy-agent-go/logic/deployspec"
 	"github.com/gurre/codedeploy-agent-go/logic/diagnostic"
 )
 
 const maxConcurrent = 16
+
+// maxBackoff caps the exponential backoff delay, matching the Ruby agent ceiling.
+const maxBackoff = 90 * time.Second
+
+// throttler is satisfied by errors that can indicate rate limiting.
+// Used with errors.As for dependency-inverted throttle detection (no import of codedeployctl).
+type throttler interface {
+	IsThrottle() bool
+}
 
 // CommandService communicates with the CodeDeploy Commands service.
 type CommandService interface {
@@ -58,18 +69,18 @@ type DeploymentTracker interface {
 
 // Poller polls the CodeDeploy Commands service for work.
 type Poller struct {
-	commandService CommandService
-	executor       CommandExecutor
-	specParser     SpecParser
-	tracker        DeploymentTracker
-	hostIdentifier string
-	pollInterval   time.Duration
-	errorBackoff   time.Duration
-	shutdownWait   time.Duration
-	logger         *slog.Logger
-
-	sem chan struct{} // bounded concurrency
-	wg  sync.WaitGroup
+	commandService    CommandService
+	executor          CommandExecutor
+	specParser        SpecParser
+	tracker           DeploymentTracker
+	logger            *slog.Logger
+	hostIdentifier    string
+	pollInterval      time.Duration
+	errorBackoff      time.Duration
+	shutdownWait      time.Duration
+	sem               chan struct{} // bounded concurrency
+	wg                sync.WaitGroup
+	consecutiveErrors int
 }
 
 // NewPoller creates a poller.
@@ -130,14 +141,21 @@ func (p *Poller) Run(ctx context.Context) error {
 		}
 
 		if err := p.poll(ctx); err != nil {
-			p.logger.Error("poll error", "error", err)
+			delay := p.computeBackoff(err)
+			p.consecutiveErrors++
+			p.logger.Error("poll error",
+				"error", err,
+				"consecutiveErrors", p.consecutiveErrors,
+				"backoffDelay", delay)
 			select {
 			case <-ctx.Done():
 				return p.shutdown()
-			case <-time.After(p.errorBackoff):
+			case <-time.After(delay):
 			}
 			continue
 		}
+
+		p.consecutiveErrors = 0
 
 		select {
 		case <-ctx.Done():
@@ -145,6 +163,16 @@ func (p *Poller) Run(ctx context.Context) error {
 		case <-time.After(p.pollInterval):
 		}
 	}
+}
+
+// computeBackoff determines the delay before the next retry.
+// Throttle errors get a fixed 60s wait; other errors use jittered exponential backoff.
+func (p *Poller) computeBackoff(err error) time.Duration {
+	var t throttler
+	if errors.As(err, &t) && t.IsThrottle() {
+		return backoff.ThrottleDelay
+	}
+	return backoff.Duration(p.consecutiveErrors, p.errorBackoff, maxBackoff)
 }
 
 func (p *Poller) poll(ctx context.Context) error {

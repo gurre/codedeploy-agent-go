@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math/rand/v2"
 	"net/http"
 	"strings"
 	"time"
@@ -128,10 +129,14 @@ func (c *Client) get(ctx context.Context, path string) (string, error) {
 
 	for attempt := range maxRetries + 1 {
 		if attempt > 0 {
+			// Jittered backoff: uniform in [base/2, base] to avoid thundering herd
+			base := time.Duration(attempt) * time.Second
+			half := base / 2
+			jitter := time.Duration(rand.Int64N(int64(half + 1)))
 			select {
 			case <-ctx.Done():
 				return "", ctx.Err()
-			case <-time.After(time.Duration(attempt) * time.Second):
+			case <-time.After(half + jitter):
 			}
 		}
 
@@ -188,10 +193,40 @@ func (c *Client) getToken(ctx context.Context) (string, error) {
 	return c.token, nil
 }
 
+// doGet performs a GET request. On 401 it refreshes the token and retries
+// exactly once, eliminating the unbounded recursion of the previous design.
 func (c *Client) doGet(ctx context.Context, path, token string) (string, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+path, nil)
+	body, status, err := c.doGetRaw(ctx, path, token)
 	if err != nil {
 		return "", err
+	}
+
+	if status == http.StatusUnauthorized && token != "" {
+		// Token may have expired — refresh once and retry
+		c.token = ""
+		newToken, tokenErr := c.getToken(ctx)
+		if tokenErr != nil {
+			return "", fmt.Errorf("imds: token refresh failed: %w", tokenErr)
+		}
+		body, status, err = c.doGetRaw(ctx, path, newToken)
+		if err != nil {
+			return "", err
+		}
+	}
+
+	if status != http.StatusOK {
+		return "", fmt.Errorf("imds: %s returned %d", path, status)
+	}
+
+	return body, nil
+}
+
+// doGetRaw performs a single HTTP GET and returns the body, status code, and error.
+// It does not retry or recurse.
+func (c *Client) doGetRaw(ctx context.Context, path, token string) (string, int, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+path, nil)
+	if err != nil {
+		return "", 0, err
 	}
 	if token != "" {
 		req.Header.Set("X-aws-ec2-metadata-token", token)
@@ -199,27 +234,13 @@ func (c *Client) doGet(ctx context.Context, path, token string) (string, error) 
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return "", err
+		return "", 0, err
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	if resp.StatusCode == http.StatusUnauthorized && token != "" {
-		// Token may have expired, clear and retry with new token
-		c.token = ""
-		newToken, tokenErr := c.getToken(ctx)
-		if tokenErr != nil {
-			return "", fmt.Errorf("imds: token refresh failed: %w", tokenErr)
-		}
-		return c.doGet(ctx, path, newToken)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("imds: %s returned %d", path, resp.StatusCode)
-	}
-
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return "", err
+		return "", resp.StatusCode, err
 	}
-	return string(body), nil
+	return string(body), resp.StatusCode, nil
 }

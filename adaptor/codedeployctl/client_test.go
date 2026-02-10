@@ -439,6 +439,66 @@ func TestServiceError_UnparsableBody(t *testing.T) {
 	}
 }
 
+// TestIsThrottle_429Status verifies that a 429 Too Many Requests response is
+// detected as throttling regardless of message content. HTTP 429 is the
+// canonical rate-limit signal and must always trigger throttle handling.
+func TestIsThrottle_429Status(t *testing.T) {
+	err := &ServiceError{StatusCode: http.StatusTooManyRequests, Message: "anything"}
+	if !err.IsThrottle() {
+		t.Error("expected IsThrottle() true for 429 status")
+	}
+}
+
+// TestIsThrottle_ThrottleMessage verifies that a message containing "Throttling"
+// is detected as throttling even with a non-429 status code. The CodeDeploy
+// service may return throttle errors with 400-series status codes.
+func TestIsThrottle_ThrottleMessage(t *testing.T) {
+	err := &ServiceError{StatusCode: 400, Message: "Throttling: Rate exceeded"}
+	if !err.IsThrottle() {
+		t.Error("expected IsThrottle() true for message containing 'Throttling'")
+	}
+}
+
+// TestIsThrottle_RateExceeded_CaseInsensitive verifies case-insensitive
+// detection of "RateExceeded" in the error message. Different service
+// implementations may capitalize the term differently.
+func TestIsThrottle_RateExceeded_CaseInsensitive(t *testing.T) {
+	err := &ServiceError{StatusCode: 400, Message: "RateExceeded: slow down"}
+	if !err.IsThrottle() {
+		t.Error("expected IsThrottle() true for message containing 'RateExceeded'")
+	}
+}
+
+// TestIsThrottle_ThrottlingExceptionType verifies that a ThrottlingException in the
+// __type field is detected as throttling even when the message is generic. The service
+// returns {"__type": "ThrottlingException", "message": "Rate exceeded"} which has no
+// "throttl" substring in the message alone.
+func TestIsThrottle_ThrottlingExceptionType(t *testing.T) {
+	err := &ServiceError{StatusCode: 400, Type: "ThrottlingException", Message: "Rate exceeded"}
+	if !err.IsThrottle() {
+		t.Error("expected IsThrottle() true for Type=ThrottlingException")
+	}
+}
+
+// TestIsThrottle_RequestThrottledType verifies that a RequestThrottled error type
+// is detected even with an empty message. Some service endpoints use this type name.
+func TestIsThrottle_RequestThrottledType(t *testing.T) {
+	err := &ServiceError{StatusCode: 400, Type: "RequestThrottled", Message: ""}
+	if !err.IsThrottle() {
+		t.Error("expected IsThrottle() true for Type=RequestThrottled")
+	}
+}
+
+// TestIsThrottle_NormalError verifies that a regular 500 server error is not
+// classified as throttling. Non-throttle errors should use exponential backoff
+// rather than the fixed throttle delay.
+func TestIsThrottle_NormalError(t *testing.T) {
+	err := &ServiceError{StatusCode: 500, Message: "Internal Server Error"}
+	if err.IsThrottle() {
+		t.Error("expected IsThrottle() false for normal 500 error")
+	}
+}
+
 // TestNewClient_DefaultEndpoint verifies that NewClient constructs the correct
 // default endpoint URL when no override is provided. The endpoint format is a
 // contract with the CodeDeploy Commands service.
