@@ -1,0 +1,149 @@
+package filesystem
+
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
+
+// TestCopyFile verifies that Copy creates an identical file at the destination
+// with the same content. This is the most common operation during Install.
+func TestCopyFile(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "src.txt")
+	dst := filepath.Join(dir, "dst.txt")
+
+	content := []byte("hello world")
+	if err := os.WriteFile(src, content, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	op := NewOperator()
+	if err := op.Copy(src, dst); err != nil {
+		t.Fatalf("Copy: %v", err)
+	}
+
+	got, err := os.ReadFile(dst)
+	if err != nil {
+		t.Fatalf("read dst: %v", err)
+	}
+	if string(got) != string(content) {
+		t.Errorf("content = %q, want %q", string(got), string(content))
+	}
+}
+
+// TestCopySymlink verifies that Copy recreates symlinks rather than following
+// them. This preserves deployment archive structure.
+func TestCopySymlink(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "target.txt")
+	if err := os.WriteFile(target, []byte("data"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	link := filepath.Join(dir, "link.txt")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+
+	dst := filepath.Join(dir, "dst-link.txt")
+	op := NewOperator()
+	if err := op.Copy(link, dst); err != nil {
+		t.Fatalf("Copy symlink: %v", err)
+	}
+
+	linkTarget, err := os.Readlink(dst)
+	if err != nil {
+		t.Fatalf("readlink: %v", err)
+	}
+	if linkTarget != target {
+		t.Errorf("symlink target = %q, want %q", linkTarget, target)
+	}
+}
+
+// TestMkdir verifies that Mkdir creates a single directory.
+func TestMkdir(t *testing.T) {
+	dir := t.TempDir()
+	newDir := filepath.Join(dir, "subdir")
+
+	op := NewOperator()
+	if err := op.Mkdir(newDir); err != nil {
+		t.Fatalf("Mkdir: %v", err)
+	}
+
+	info, err := os.Stat(newDir)
+	if err != nil {
+		t.Fatalf("stat: %v", err)
+	}
+	if !info.IsDir() {
+		t.Error("should be a directory")
+	}
+}
+
+// TestRemoveFile verifies that Remove deletes a file.
+func TestRemoveFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "file.txt")
+	if err := os.WriteFile(path, []byte("data"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	op := NewOperator()
+	if err := op.Remove(path); err != nil {
+		t.Fatalf("Remove: %v", err)
+	}
+
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Error("file should be removed")
+	}
+}
+
+// TestRemoveNonExistentIsNoOp verifies that removing a non-existent path
+// does not return an error, matching the Ruby agent's behavior.
+func TestRemoveNonExistentIsNoOp(t *testing.T) {
+	op := NewOperator()
+	if err := op.Remove("/nonexistent/path"); err != nil {
+		t.Errorf("Remove nonexistent: %v", err)
+	}
+}
+
+// TestRemoveNonEmptyDirIsNoOp verifies that Remove does not fail on
+// non-empty directories (skips them silently), matching Ruby behavior.
+func TestRemoveNonEmptyDirIsNoOp(t *testing.T) {
+	dir := t.TempDir()
+	subdir := filepath.Join(dir, "sub")
+	if err := os.Mkdir(subdir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(subdir, "file"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	op := NewOperator()
+	if err := op.Remove(subdir); err != nil {
+		t.Errorf("Remove non-empty dir: %v", err)
+	}
+
+	// Directory should still exist
+	if _, err := os.Stat(subdir); os.IsNotExist(err) {
+		t.Error("non-empty dir should not be removed")
+	}
+}
+
+// TestRemoveEmptyDir verifies that Remove deletes empty directories.
+func TestRemoveEmptyDir(t *testing.T) {
+	dir := t.TempDir()
+	subdir := filepath.Join(dir, "empty")
+	if err := os.Mkdir(subdir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	op := NewOperator()
+	if err := op.Remove(subdir); err != nil {
+		t.Fatalf("Remove: %v", err)
+	}
+
+	if _, err := os.Stat(subdir); !os.IsNotExist(err) {
+		t.Error("empty dir should be removed")
+	}
+}

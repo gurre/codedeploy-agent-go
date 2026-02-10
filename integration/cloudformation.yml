@@ -1,0 +1,361 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  EC2 integration test infrastructure for the Go CodeDeploy agent.
+  Deploys 5 instances (AL2023, AL2, Ubuntu 22.04, RHEL 9, Windows Server 2022),
+  IAM roles, an S3 bundle bucket, and CodeDeploy application with per-OS deployment groups.
+
+Parameters:
+  StackPrefix:
+    Type: String
+    Default: cdagent-integ
+    Description: Prefix for all resource names.
+
+  InstanceType:
+    Type: String
+    Default: t3.micro
+    Description: EC2 instance type for all test instances.
+
+  Al2023AmiId:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64
+    Description: Amazon Linux 2023 AMI.
+
+  Al2AmiId:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-x86_64-gp2
+    Description: Amazon Linux 2 AMI.
+
+  UbuntuAmiId:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/canonical/ubuntu/server/22.04/stable/current/amd64/hvm/ebs-gp2/ami-id
+    Description: Ubuntu 22.04 AMI.
+
+  Rhel9AmiId:
+    Type: String
+    Description: RHEL 9 AMI ID. Resolved by run.sh via ec2 describe-images (Red Hat does not publish to SSM Parameter Store).
+
+  WindowsAmiId:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-windows-latest/Windows_Server-2022-English-Full-Base
+    Description: Windows Server 2022 AMI.
+
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: VPC for the security group and instances. Resolved by run.sh to the default VPC.
+
+Resources:
+  # ---------------------------------------------------------------------------
+  # IAM
+  # ---------------------------------------------------------------------------
+  InstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${StackPrefix}-instance-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+        - arn:aws:iam::aws:policy/AmazonS3ReadOnlyAccess
+
+  InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      InstanceProfileName: !Sub "${StackPrefix}-instance-profile"
+      Roles:
+        - !Ref InstanceRole
+
+  DeploymentRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${StackPrefix}-deploy-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codedeploy.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSCodeDeployRole
+
+  # ---------------------------------------------------------------------------
+  # Storage
+  # ---------------------------------------------------------------------------
+  TestBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "${StackPrefix}-bundles-${AWS::AccountId}"
+
+  # ---------------------------------------------------------------------------
+  # Network
+  # ---------------------------------------------------------------------------
+  SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Sub "${StackPrefix} egress-only (SSM uses outbound HTTPS)"
+      VpcId: !Ref VpcId
+      SecurityGroupEgress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+
+  # ---------------------------------------------------------------------------
+  # EC2 Instances
+  # ---------------------------------------------------------------------------
+  InstanceAl2023:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !Ref Al2023AmiId
+      InstanceType: !Ref InstanceType
+      IamInstanceProfile: !Ref InstanceProfile
+      SecurityGroupIds:
+        - !Ref SecurityGroup
+      Tags:
+        - Key: Name
+          Value: !Sub "${StackPrefix}-al2023"
+        - Key: os-name
+          Value: al2023
+        - Key: codedeploy-group
+          Value: !Ref StackPrefix
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          set -euo pipefail
+          mkdir -p /opt/codedeploy-agent/bin
+          mkdir -p /opt/codedeploy-agent/deployment-root
+          mkdir -p /var/log/aws/codedeploy-agent
+          mkdir -p /etc/codedeploy-agent/conf
+          cat > /etc/codedeploy-agent/conf/codedeployagent.yml <<'CONF'
+          wait_between_runs: 5
+          CONF
+
+  InstanceAl2:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !Ref Al2AmiId
+      InstanceType: !Ref InstanceType
+      IamInstanceProfile: !Ref InstanceProfile
+      SecurityGroupIds:
+        - !Ref SecurityGroup
+      Tags:
+        - Key: Name
+          Value: !Sub "${StackPrefix}-al2"
+        - Key: os-name
+          Value: al2
+        - Key: codedeploy-group
+          Value: !Ref StackPrefix
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          set -euo pipefail
+          mkdir -p /opt/codedeploy-agent/bin
+          mkdir -p /opt/codedeploy-agent/deployment-root
+          mkdir -p /var/log/aws/codedeploy-agent
+          mkdir -p /etc/codedeploy-agent/conf
+          cat > /etc/codedeploy-agent/conf/codedeployagent.yml <<'CONF'
+          wait_between_runs: 5
+          CONF
+
+  InstanceUbuntu:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !Ref UbuntuAmiId
+      InstanceType: !Ref InstanceType
+      IamInstanceProfile: !Ref InstanceProfile
+      SecurityGroupIds:
+        - !Ref SecurityGroup
+      Tags:
+        - Key: Name
+          Value: !Sub "${StackPrefix}-ubuntu"
+        - Key: os-name
+          Value: ubuntu
+        - Key: codedeploy-group
+          Value: !Ref StackPrefix
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          set -euo pipefail
+          snap install amazon-ssm-agent --classic
+          snap start amazon-ssm-agent
+          mkdir -p /opt/codedeploy-agent/bin
+          mkdir -p /opt/codedeploy-agent/deployment-root
+          mkdir -p /var/log/aws/codedeploy-agent
+          mkdir -p /etc/codedeploy-agent/conf
+          cat > /etc/codedeploy-agent/conf/codedeployagent.yml <<'CONF'
+          wait_between_runs: 5
+          CONF
+
+  InstanceRhel9:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !Ref Rhel9AmiId
+      InstanceType: !Ref InstanceType
+      IamInstanceProfile: !Ref InstanceProfile
+      SecurityGroupIds:
+        - !Ref SecurityGroup
+      Tags:
+        - Key: Name
+          Value: !Sub "${StackPrefix}-rhel9"
+        - Key: os-name
+          Value: rhel9
+        - Key: codedeploy-group
+          Value: !Ref StackPrefix
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          set -euo pipefail
+          dnf install -y amazon-ssm-agent
+          systemctl enable amazon-ssm-agent
+          systemctl start amazon-ssm-agent
+          mkdir -p /opt/codedeploy-agent/bin
+          mkdir -p /opt/codedeploy-agent/deployment-root
+          mkdir -p /var/log/aws/codedeploy-agent
+          mkdir -p /etc/codedeploy-agent/conf
+          cat > /etc/codedeploy-agent/conf/codedeployagent.yml <<'CONF'
+          wait_between_runs: 5
+          CONF
+
+  InstanceWindows:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !Ref WindowsAmiId
+      InstanceType: !Ref InstanceType
+      IamInstanceProfile: !Ref InstanceProfile
+      SecurityGroupIds:
+        - !Ref SecurityGroup
+      Tags:
+        - Key: Name
+          Value: !Sub "${StackPrefix}-windows"
+        - Key: os-name
+          Value: windows
+        - Key: codedeploy-group
+          Value: !Ref StackPrefix
+      UserData:
+        Fn::Base64: !Sub |
+          <powershell>
+          New-Item -ItemType Directory -Force -Path C:\codedeploy-agent\bin
+          New-Item -ItemType Directory -Force -Path C:\codedeploy-agent\deployment-root
+          New-Item -ItemType Directory -Force -Path C:\codedeploy-agent\logs
+          New-Item -ItemType Directory -Force -Path C:\codedeploy-agent\conf
+          @"
+          root_dir: C:\codedeploy-agent\deployment-root
+          log_dir: C:\codedeploy-agent\logs
+          wait_between_runs: 5
+          "@ | Set-Content C:\codedeploy-agent\conf\codedeployagent.yml
+          </powershell>
+
+  # ---------------------------------------------------------------------------
+  # CodeDeploy
+  # ---------------------------------------------------------------------------
+  CodeDeployApp:
+    Type: AWS::CodeDeploy::Application
+    Properties:
+      ApplicationName: !Sub "${StackPrefix}-app"
+      ComputePlatform: Server
+
+  DgAl2023:
+    Type: AWS::CodeDeploy::DeploymentGroup
+    Properties:
+      ApplicationName: !Ref CodeDeployApp
+      DeploymentGroupName: !Sub "${StackPrefix}-al2023"
+      ServiceRoleArn: !GetAtt DeploymentRole.Arn
+      DeploymentConfigName: CodeDeployDefault.AllAtOnce
+      Ec2TagFilters:
+        - Key: os-name
+          Value: al2023
+          Type: KEY_AND_VALUE
+        - Key: codedeploy-group
+          Value: !Ref StackPrefix
+          Type: KEY_AND_VALUE
+
+  DgAl2:
+    Type: AWS::CodeDeploy::DeploymentGroup
+    Properties:
+      ApplicationName: !Ref CodeDeployApp
+      DeploymentGroupName: !Sub "${StackPrefix}-al2"
+      ServiceRoleArn: !GetAtt DeploymentRole.Arn
+      DeploymentConfigName: CodeDeployDefault.AllAtOnce
+      Ec2TagFilters:
+        - Key: os-name
+          Value: al2
+          Type: KEY_AND_VALUE
+        - Key: codedeploy-group
+          Value: !Ref StackPrefix
+          Type: KEY_AND_VALUE
+
+  DgUbuntu:
+    Type: AWS::CodeDeploy::DeploymentGroup
+    Properties:
+      ApplicationName: !Ref CodeDeployApp
+      DeploymentGroupName: !Sub "${StackPrefix}-ubuntu"
+      ServiceRoleArn: !GetAtt DeploymentRole.Arn
+      DeploymentConfigName: CodeDeployDefault.AllAtOnce
+      Ec2TagFilters:
+        - Key: os-name
+          Value: ubuntu
+          Type: KEY_AND_VALUE
+        - Key: codedeploy-group
+          Value: !Ref StackPrefix
+          Type: KEY_AND_VALUE
+
+  DgRhel9:
+    Type: AWS::CodeDeploy::DeploymentGroup
+    Properties:
+      ApplicationName: !Ref CodeDeployApp
+      DeploymentGroupName: !Sub "${StackPrefix}-rhel9"
+      ServiceRoleArn: !GetAtt DeploymentRole.Arn
+      DeploymentConfigName: CodeDeployDefault.AllAtOnce
+      Ec2TagFilters:
+        - Key: os-name
+          Value: rhel9
+          Type: KEY_AND_VALUE
+        - Key: codedeploy-group
+          Value: !Ref StackPrefix
+          Type: KEY_AND_VALUE
+
+  DgWindows:
+    Type: AWS::CodeDeploy::DeploymentGroup
+    Properties:
+      ApplicationName: !Ref CodeDeployApp
+      DeploymentGroupName: !Sub "${StackPrefix}-windows"
+      ServiceRoleArn: !GetAtt DeploymentRole.Arn
+      DeploymentConfigName: CodeDeployDefault.AllAtOnce
+      Ec2TagFilters:
+        - Key: os-name
+          Value: windows
+          Type: KEY_AND_VALUE
+        - Key: codedeploy-group
+          Value: !Ref StackPrefix
+          Type: KEY_AND_VALUE
+
+Outputs:
+  BucketName:
+    Value: !Ref TestBucket
+  CodeDeployAppName:
+    Value: !Ref CodeDeployApp
+  InstanceIdAl2023:
+    Value: !Ref InstanceAl2023
+  InstanceIdAl2:
+    Value: !Ref InstanceAl2
+  InstanceIdUbuntu:
+    Value: !Ref InstanceUbuntu
+  InstanceIdRhel9:
+    Value: !Ref InstanceRhel9
+  InstanceIdWindows:
+    Value: !Ref InstanceWindows
+  DgAl2023Name:
+    Value: !Sub "${StackPrefix}-al2023"
+  DgAl2Name:
+    Value: !Sub "${StackPrefix}-al2"
+  DgUbuntuName:
+    Value: !Sub "${StackPrefix}-ubuntu"
+  DgRhel9Name:
+    Value: !Sub "${StackPrefix}-rhel9"
+  DgWindowsName:
+    Value: !Sub "${StackPrefix}-windows"

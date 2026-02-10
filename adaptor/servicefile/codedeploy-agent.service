@@ -1,0 +1,16 @@
+[Unit]
+Description=AWS CodeDeploy Host Agent
+After=network.target
+
+[Service]
+Type=exec
+ExecStart=/opt/codedeploy-agent/bin/codedeploy-agent /etc/codedeploy-agent/conf/codedeployagent.yml
+Restart=on-failure
+RestartSec=10
+
+# Uncomment the following line to run the agent as a non-root user.
+# The user must exist and own /opt/codedeploy-agent and /var/log/aws.
+#User=codedeploy
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,141 @@
+# yaml-language-server: $schema=https://goreleaser.com/static/schema.json
+version: 2
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: codedeploy-agent
+    main: ./cmd/codedeploy-agent
+    binary: codedeploy-agent
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - freebsd
+      - windows
+    goarch:
+      - amd64
+      - arm64
+      - arm
+    goarm:
+      - "7"
+    ignore:
+      - goos: darwin
+        goarch: arm
+      - goos: freebsd
+        goarch: arm
+      - goos: windows
+        goarch: arm
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+
+  - id: codedeploy-local
+    main: ./cmd/codedeploy-local
+    binary: codedeploy-local
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+
+# Compressed archives per build
+archives:
+  - id: compressed
+    ids:
+      - codedeploy-agent
+      - codedeploy-local
+    formats: [tar.gz]
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_
+      {{- .Os }}_
+      {{- if eq .Arch "amd64" }}x86_64
+      {{- else if eq .Arch "386" }}i386
+      {{- else }}{{ .Arch }}{{ end }}
+      {{- if .Arm }}v{{ .Arm }}{{ end }}
+    allow_different_binary_count: true
+    files:
+      - LICENSE
+      - README.md
+      - init.d/*
+
+  - id: binaries
+    ids:
+      - codedeploy-agent
+      - codedeploy-local
+    formats: [binary]
+    name_template: >-
+      {{ .Binary }}_{{ .Version }}_
+      {{- .Os }}_
+      {{- if eq .Arch "amd64" }}x86_64
+      {{- else if eq .Arch "386" }}i386
+      {{- else }}{{ .Arch }}{{ end }}
+      {{- if .Arm }}v{{ .Arm }}{{ end }}
+
+# Linux packages via nFPM
+nfpms:
+  - id: packages
+    package_name: codedeploy-agent
+    ids:
+      - codedeploy-agent
+    vendor: gurre
+    homepage: https://github.com/gurre/codedeploy-agent-go
+    maintainer: gurre
+    description: AWS CodeDeploy agent reimplemented in Go
+    license: Apache-2.0
+    formats:
+      - deb
+      - rpm
+      - apk
+      - archlinux
+    bindir: /opt/codedeploy-agent/bin
+    contents:
+      - src: init.d/codedeploy-agent.service
+        dst: /etc/systemd/system/codedeploy-agent.service
+        type: config
+      - src: init.d/codedeploy-agent
+        dst: /etc/init.d/codedeploy-agent
+        type: config
+        file_info:
+          mode: 0755
+      - src: certs/host-agent-deployment-signer-ca-chain.pem
+        dst: /opt/codedeploy-agent/certs/host-agent-deployment-signer-ca-chain.pem
+      - dst: /opt/codedeploy-agent/deployment-root
+        type: dir
+      - dst: /etc/codedeploy-agent/conf
+        type: dir
+    rpm:
+      group: System Environment/Daemons
+    deb:
+      lintian_overrides:
+        - statically-linked-binary
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^ci:"
+      - "^chore:"
+
+release:
+  github:
+    owner: gurre
+    name: codedeploy-agent-go
+  draft: false
+  prerelease: auto
