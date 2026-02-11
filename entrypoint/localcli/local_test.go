@@ -1,11 +1,22 @@
 package localcli
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
+
+// testOS returns the appropriate OS value for test appspecs based on runtime.
+// Use this in tests instead of hardcoding "os: linux" to ensure tests pass on all platforms.
+func testOS() string {
+	if runtime.GOOS == "windows" {
+		return "windows"
+	}
+	return "linux"
+}
 
 // TestDefaultOptions verifies defaults match the Ruby CLI's defaults.
 // The Ruby agent uses "directory" as bundle type, "DISALLOW" as FEB,
@@ -90,7 +101,7 @@ func TestValidate_DirectoryBundle(t *testing.T) {
 	}
 
 	// Add appspec.yml -> success
-	if err := os.WriteFile(filepath.Join(dir, "appspec.yml"), []byte("version: 0.0\nos: linux\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "appspec.yml"), []byte(fmt.Sprintf("version: 0.0\nos: %s\n", testOS())), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	err = validate(opts)
@@ -107,7 +118,7 @@ func TestValidate_CustomAppSpecFilename(t *testing.T) {
 	dir := t.TempDir()
 
 	// Create a custom appspec file (not the default name)
-	if err := os.WriteFile(filepath.Join(dir, "appspec_override.yaml"), []byte("version: 0.0\nos: linux\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "appspec_override.yaml"), []byte(fmt.Sprintf("version: 0.0\nos: %s\n", testOS())), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -129,7 +140,7 @@ func TestValidate_CustomAppSpecFilename_Missing(t *testing.T) {
 	dir := t.TempDir()
 
 	// Create only the default appspec — but request a different name
-	if err := os.WriteFile(filepath.Join(dir, "appspec.yml"), []byte("version: 0.0\nos: linux\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "appspec.yml"), []byte(fmt.Sprintf("version: 0.0\nos: %s\n", testOS())), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -152,7 +163,7 @@ func TestValidate_CustomAppSpecFilename_Missing(t *testing.T) {
 // of the defaults (or empty). Ensures the fix doesn't break the common case.
 func TestValidate_DefaultAppSpecFallback(t *testing.T) {
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "appspec.yaml"), []byte("version: 0.0\nos: linux\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "appspec.yaml"), []byte(fmt.Sprintf("version: 0.0\nos: %s\n", testOS())), 0o644); err != nil {
 		t.Fatal(err)
 	}
 

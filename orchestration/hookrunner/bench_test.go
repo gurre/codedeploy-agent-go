@@ -2,9 +2,11 @@ package hookrunner
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/gurre/codedeploy-agent-go/logic/lifecycle"
@@ -20,16 +22,20 @@ func BenchmarkRun(b *testing.B) {
 	deployDir := b.TempDir()
 	archiveDir := filepath.Join(deployDir, "deployment-archive")
 	_ = os.MkdirAll(filepath.Join(archiveDir, "scripts"), 0o755)
-	_ = os.WriteFile(filepath.Join(archiveDir, "appspec.yml"), []byte(`
+	osValue := "linux"
+	if runtime.GOOS == "windows" {
+		osValue = "windows"
+	}
+	_ = os.WriteFile(filepath.Join(archiveDir, "appspec.yml"), []byte(fmt.Sprintf(`
 version: 0.0
-os: linux
+os: %s
 hooks:
   BeforeInstall:
     - location: scripts/install.sh
       timeout: 60
     - location: scripts/setup.sh
       timeout: 60
-`), 0o644)
+`, osValue)), 0o644)
 	_ = os.WriteFile(filepath.Join(archiveDir, "scripts/install.sh"), []byte("#!/bin/sh\necho ok\n"), 0o755)
 	_ = os.WriteFile(filepath.Join(archiveDir, "scripts/setup.sh"), []byte("#!/bin/sh\necho ok\n"), 0o755)
 

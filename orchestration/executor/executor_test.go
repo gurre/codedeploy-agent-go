@@ -2,9 +2,11 @@ package executor
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -15,12 +17,23 @@ import (
 	"github.com/gurre/codedeploy-agent-go/state/deployment"
 )
 
-const testAppspec = `version: 0.0
-os: linux
+// testOS returns the appropriate OS value for test appspecs based on runtime.
+// Use this in tests instead of hardcoding "os: linux" to ensure tests pass on all platforms.
+func testOS() string {
+	if runtime.GOOS == "windows" {
+		return "windows"
+	}
+	return "linux"
+}
+
+func testAppspec() string {
+	return fmt.Sprintf(`version: 0.0
+os: %s
 files:
   - source: /
     destination: /opt/app
-`
+`, testOS())
+}
 
 // newTestExecutor wires up an Executor with the given mocks and temp dir.
 // It creates the instructions directory so pointer files can be written.
@@ -76,7 +89,7 @@ func writeAppspec(t *testing.T, dir string) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "appspec.yml"), []byte(testAppspec), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "appspec.yml"), []byte(testAppspec()), 0o644); err != nil {
 		t.Fatal(err)
 	}
 }

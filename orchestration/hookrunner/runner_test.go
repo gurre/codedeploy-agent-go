@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/gurre/codedeploy-agent-go/logic/lifecycle"
@@ -27,6 +28,15 @@ func (f *fakeScriptRunner) Run(_ context.Context, scriptPath string, _ map[strin
 	}, nil
 }
 
+// testOS returns the appropriate OS value for test appspecs based on runtime.
+// Use this in tests instead of hardcoding "os: linux" to ensure tests pass on all platforms.
+func testOS() string {
+	if runtime.GOOS == "windows" {
+		return "windows"
+	}
+	return "linux"
+}
+
 func setupDeployment(t *testing.T, appspecContent string) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -46,14 +56,14 @@ func setupDeployment(t *testing.T, appspecContent string) string {
 // TestRunExecutesScripts verifies that hook runner finds and executes the
 // scripts defined in the appspec for the given lifecycle event.
 func TestRunExecutesScripts(t *testing.T) {
-	appspec := `
+	appspec := fmt.Sprintf(`
 version: 0.0
-os: linux
+os: %s
 hooks:
   BeforeInstall:
     - location: scripts/install.sh
       timeout: 60
-`
+`, testOS())
 	deployDir := setupDeployment(t, appspec)
 	sr := &fakeScriptRunner{}
 	runner := NewRunner(sr, slog.Default())
@@ -82,13 +92,13 @@ hooks:
 // TestRunNoopForMissingEvent verifies that a lifecycle event with no scripts
 // in the appspec returns IsNoop=true, allowing the poller to skip execution.
 func TestRunNoopForMissingEvent(t *testing.T) {
-	appspec := `
+	appspec := fmt.Sprintf(`
 version: 0.0
-os: linux
+os: %s
 hooks:
   BeforeInstall:
     - location: scripts/install.sh
-`
+`, testOS())
 	deployDir := setupDeployment(t, appspec)
 	sr := &fakeScriptRunner{}
 	runner := NewRunner(sr, slog.Default())
@@ -117,13 +127,13 @@ hooks:
 // TestRunFailedScript verifies that a non-zero exit code from a script
 // returns an error, which the poller uses to report failure.
 func TestRunFailedScript(t *testing.T) {
-	appspec := `
+	appspec := fmt.Sprintf(`
 version: 0.0
-os: linux
+os: %s
 hooks:
   BeforeInstall:
     - location: scripts/install.sh
-`
+`, testOS())
 	deployDir := setupDeployment(t, appspec)
 	sr := &fakeScriptRunner{exitCode: 1}
 	runner := NewRunner(sr, slog.Default())
@@ -145,14 +155,14 @@ hooks:
 
 // TestRunTimedOutScript verifies that a timed-out script returns an error.
 func TestRunTimedOutScript(t *testing.T) {
-	appspec := `
+	appspec := fmt.Sprintf(`
 version: 0.0
-os: linux
+os: %s
 hooks:
   BeforeInstall:
     - location: scripts/install.sh
       timeout: 1
-`
+`, testOS())
 	deployDir := setupDeployment(t, appspec)
 	sr := &fakeScriptRunner{timedOut: true}
 	runner := NewRunner(sr, slog.Default())
@@ -174,13 +184,13 @@ hooks:
 
 // TestIsNoop verifies the noop check without running scripts.
 func TestIsNoop(t *testing.T) {
-	appspec := `
+	appspec := fmt.Sprintf(`
 version: 0.0
-os: linux
+os: %s
 hooks:
   BeforeInstall:
     - location: scripts/install.sh
-`
+`, testOS())
 	deployDir := setupDeployment(t, appspec)
 	sr := &fakeScriptRunner{}
 	runner := NewRunner(sr, slog.Default())
@@ -219,14 +229,14 @@ hooks:
 // selectDeploymentRoot falls back to DeploymentRootDir. This fallback is needed
 // because the very first deployment has no last-successful record yet.
 func TestRun_LastSuccessful_Fallback(t *testing.T) {
-	appspec := `
+	appspec := fmt.Sprintf(`
 version: 0.0
-os: linux
+os: %s
 hooks:
   ApplicationStop:
     - location: scripts/install.sh
       timeout: 60
-`
+`, testOS())
 	// The current deployment root has the appspec and scripts.
 	currentDir := setupDeployment(t, appspec)
 	// Create a second temp dir to serve as a plausible but unused last-successful dir.
@@ -261,14 +271,14 @@ hooks:
 // is empty, selectDeploymentRoot falls back to DeploymentRootDir. This covers
 // the MostRecent branch in selectDeploymentRoot with an empty pointer.
 func TestRun_MostRecent_Fallback(t *testing.T) {
-	appspec := `
+	appspec := fmt.Sprintf(`
 version: 0.0
-os: linux
+os: %s
 hooks:
   BeforeBlockTraffic:
     - location: scripts/install.sh
       timeout: 60
-`
+`, testOS())
 	currentDir := setupDeployment(t, appspec)
 	sr := &fakeScriptRunner{}
 	runner := NewRunner(sr, slog.Default())
@@ -408,14 +418,14 @@ func (e *errScriptRunner) Run(_ context.Context, _ string, _ map[string]string, 
 // ensuring failures from the process runner (e.g. binary not found, permission
 // denied) are not silently swallowed.
 func TestRun_ScriptError(t *testing.T) {
-	appspec := `
+	appspec := fmt.Sprintf(`
 version: 0.0
-os: linux
+os: %s
 hooks:
   BeforeInstall:
     - location: scripts/install.sh
       timeout: 60
-`
+`, testOS())
 	deployDir := setupDeployment(t, appspec)
 	scriptErr := fmt.Errorf("process runner: exec failed")
 	sr := &errScriptRunner{err: scriptErr}

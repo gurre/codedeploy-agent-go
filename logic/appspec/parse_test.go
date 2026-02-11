@@ -1,15 +1,27 @@
 package appspec
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 )
+
+// testOS returns the appropriate OS value for test appspecs based on runtime.
+// Use this in tests instead of hardcoding "os: linux" to ensure tests pass on all platforms.
+func testOS() string {
+	if runtime.GOOS == "windows" {
+		return "windows"
+	}
+	return "linux"
+}
 
 // TestParseMinimalSpec verifies that a minimal valid appspec with only version
 // and os parses successfully. This is the smallest valid appspec.
 func TestParseMinimalSpec(t *testing.T) {
-	data := []byte("version: 0.0\nos: linux\n")
+	data := []byte(fmt.Sprintf("version: 0.0\nos: %s\n", testOS()))
 	spec, err := Parse(data)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -17,15 +29,15 @@ func TestParseMinimalSpec(t *testing.T) {
 	if spec.Version != 0.0 {
 		t.Errorf("version = %v, want 0.0", spec.Version)
 	}
-	if spec.OS != "linux" {
-		t.Errorf("os = %q, want linux", spec.OS)
+	if spec.OS != testOS() {
+		t.Errorf("os = %q, want %s", spec.OS, testOS())
 	}
 }
 
 // TestParseInvalidVersion rejects versions other than 0.0, which is the only
 // supported appspec version. This guards against forward-incompatible deployments.
 func TestParseInvalidVersion(t *testing.T) {
-	data := []byte("version: 1.0\nos: linux\n")
+	data := []byte(fmt.Sprintf("version: 1.0\nos: %s\n", testOS()))
 	_, err := Parse(data)
 	if err == nil {
 		t.Fatal("expected error for invalid version")
@@ -41,12 +53,64 @@ func TestParseInvalidOS(t *testing.T) {
 	}
 }
 
+// TestParseOSMismatch verifies that appspec parsing fails when the OS field
+// doesn't match the runtime platform. This prevents Linux agents from attempting
+// to execute Windows scripts and vice versa, matching AWS CodeDeploy behavior.
+func TestParseOSMismatch(t *testing.T) {
+	t.Helper()
+
+	// Determine wrong OS for current runtime
+	var wrongOS string
+	if runtime.GOOS == "windows" {
+		wrongOS = "linux"
+	} else {
+		wrongOS = "windows"
+	}
+
+	data := []byte(fmt.Sprintf("version: 0.0\nos: %s\n", wrongOS))
+	_, err := Parse(data)
+
+	if err == nil {
+		t.Fatal("expected error for OS mismatch, got nil")
+	}
+	if !strings.Contains(err.Error(), "platform mismatch") {
+		t.Errorf("expected 'platform mismatch' in error, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), wrongOS) {
+		t.Errorf("expected error to mention wrong OS %q, got: %v", wrongOS, err)
+	}
+}
+
+// TestParseOSMatch verifies that appspec parsing succeeds when the OS field
+// matches the runtime platform.
+func TestParseOSMatch(t *testing.T) {
+	t.Helper()
+
+	// Determine correct OS for current runtime
+	var correctOS string
+	if runtime.GOOS == "windows" {
+		correctOS = "windows"
+	} else {
+		correctOS = "linux" // darwin runs tests but deploys as "linux"
+	}
+
+	data := []byte(fmt.Sprintf("version: 0.0\nos: %s\n", correctOS))
+	spec, err := Parse(data)
+
+	if err != nil {
+		t.Fatalf("unexpected error for matching OS: %v", err)
+	}
+	if spec.OS != correctOS {
+		t.Errorf("parsed OS = %q, want %q", spec.OS, correctOS)
+	}
+}
+
 // TestParseHooks verifies that hooks section is correctly parsed into Script
 // structs with location, timeout, runas, and sudo fields.
 func TestParseHooks(t *testing.T) {
-	data := []byte(`
+	data := []byte(fmt.Sprintf(`
 version: 0.0
-os: linux
+os: %s
 hooks:
   BeforeInstall:
     - location: scripts/install.sh
@@ -54,9 +118,10 @@ hooks:
       runas: root
       sudo: true
     - location: scripts/setup.sh
+      timeout: 600
   AfterInstall:
     - location: scripts/verify.sh
-`)
+`, testOS()))
 	spec, err := Parse(data)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -82,22 +147,22 @@ hooks:
 		t.Error("sudo should be true")
 	}
 
-	// Second script gets default timeout
-	if bi[1].Timeout != 3600 {
-		t.Errorf("default timeout = %d, want 3600", bi[1].Timeout)
+	// Second script has explicit timeout
+	if bi[1].Timeout != 600 {
+		t.Errorf("timeout = %d, want 600", bi[1].Timeout)
 	}
 }
 
 // TestParseHookMissingLocation rejects hooks that define a script without a
 // location field, which would make the script unrunnable.
 func TestParseHookMissingLocation(t *testing.T) {
-	data := []byte(`
+	data := []byte(fmt.Sprintf(`
 version: 0.0
-os: linux
+os: %s
 hooks:
   BeforeInstall:
     - timeout: 300
-`)
+`, testOS()))
 	_, err := Parse(data)
 	if err == nil {
 		t.Fatal("expected error for missing location")
@@ -106,15 +171,15 @@ hooks:
 
 // TestParseFiles verifies that the files section maps source to destination correctly.
 func TestParseFiles(t *testing.T) {
-	data := []byte(`
+	data := []byte(fmt.Sprintf(`
 version: 0.0
-os: linux
+os: %s
 files:
   - source: /
     destination: /opt/app
   - source: config/db.yml
     destination: /etc/app/
-`)
+`, testOS()))
 	spec, err := Parse(data)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -130,9 +195,9 @@ files:
 // TestParsePermissionsLinux verifies that permission entries parse correctly
 // for linux targets, including owner, group, mode, and default patterns.
 func TestParsePermissionsLinux(t *testing.T) {
-	data := []byte(`
+	data := []byte(fmt.Sprintf(`
 version: 0.0
-os: linux
+os: %s
 permissions:
   - object: /opt/app
     owner: deploy
@@ -141,7 +206,7 @@ permissions:
     type:
       - file
       - directory
-`)
+`, testOS()))
 	spec, err := Parse(data)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -179,7 +244,7 @@ permissions:
 // TestParseFileExistsBehaviorValid accepts valid values.
 func TestParseFileExistsBehaviorValid(t *testing.T) {
 	for _, val := range []string{"DISALLOW", "OVERWRITE", "RETAIN"} {
-		data := []byte("version: 0.0\nos: linux\nfile_exists_behavior: " + val + "\n")
+		data := []byte(fmt.Sprintf("version: 0.0\nos: %s\nfile_exists_behavior: %s\n", testOS(), val))
 		spec, err := Parse(data)
 		if err != nil {
 			t.Errorf("unexpected error for %q: %v", val, err)
@@ -192,7 +257,7 @@ func TestParseFileExistsBehaviorValid(t *testing.T) {
 
 // TestParseFileExistsBehaviorInvalid rejects unknown behaviors.
 func TestParseFileExistsBehaviorInvalid(t *testing.T) {
-	data := []byte("version: 0.0\nos: linux\nfile_exists_behavior: UNKNOWN\n")
+	data := []byte(fmt.Sprintf("version: 0.0\nos: %s\nfile_exists_behavior: UNKNOWN\n", testOS()))
 	_, err := Parse(data)
 	if err == nil {
 		t.Fatal("expected error for invalid file_exists_behavior")
@@ -202,14 +267,14 @@ func TestParseFileExistsBehaviorInvalid(t *testing.T) {
 // TestParseNullHooksAreSkipped verifies that null hook entries are silently
 // ignored rather than causing parse errors.
 func TestParseNullHooksAreSkipped(t *testing.T) {
-	data := []byte(`
+	data := []byte(fmt.Sprintf(`
 version: 0.0
-os: linux
+os: %s
 hooks:
   BeforeInstall:
   AfterInstall:
     - location: scripts/test.sh
-`)
+`, testOS()))
 	spec, err := Parse(data)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -291,7 +356,7 @@ func TestPermissionMatchesExcept(t *testing.T) {
 func TestFindAppSpecFile_CustomFilenameNoFallback(t *testing.T) {
 	dir := t.TempDir()
 	// Create default appspec.yml but NOT the custom filename
-	if err := os.WriteFile(filepath.Join(dir, "appspec.yml"), []byte("version: 0.0\nos: linux\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "appspec.yml"), []byte(fmt.Sprintf("version: 0.0\nos: %s\n", testOS())), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	_, err := FindAppSpecFile(dir, "custom_appspec.yml")
@@ -305,7 +370,7 @@ func TestFindAppSpecFile_CustomFilenameNoFallback(t *testing.T) {
 func TestFindAppSpecFile_CustomFilenameFound(t *testing.T) {
 	dir := t.TempDir()
 	customFile := filepath.Join(dir, "custom_appspec.yml")
-	if err := os.WriteFile(customFile, []byte("version: 0.0\nos: linux\n"), 0o644); err != nil {
+	if err := os.WriteFile(customFile, []byte(fmt.Sprintf("version: 0.0\nos: %s\n", testOS())), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	path, err := FindAppSpecFile(dir, "custom_appspec.yml")
@@ -322,7 +387,7 @@ func TestFindAppSpecFile_CustomFilenameFound(t *testing.T) {
 func TestFindAppSpecFile_DefaultFallbackToYaml(t *testing.T) {
 	dir := t.TempDir()
 	yamlFile := filepath.Join(dir, "appspec.yaml")
-	if err := os.WriteFile(yamlFile, []byte("version: 0.0\nos: linux\n"), 0o644); err != nil {
+	if err := os.WriteFile(yamlFile, []byte(fmt.Sprintf("version: 0.0\nos: %s\n", testOS())), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	path, err := FindAppSpecFile(dir, "appspec.yml")
@@ -654,9 +719,9 @@ func TestSELinuxRange_GetRange(t *testing.T) {
 // Since rawContext is unexported, this is the only way to exercise
 // ParseContext from a test.
 func TestParse_WithContext(t *testing.T) {
-	data := []byte(`
+	data := []byte(fmt.Sprintf(`
 version: 0.0
-os: linux
+os: %s
 files:
   - source: /
     destination: /opt/app
@@ -672,7 +737,7 @@ permissions:
       range:
         low: s0
         high: s0:c0.c1023
-`)
+`, testOS()))
 	spec, err := Parse(data)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -705,9 +770,9 @@ permissions:
 // low sensitivity level (no high) parses correctly and GetRange returns just
 // the low value.
 func TestParse_WithContextLowOnly(t *testing.T) {
-	data := []byte(`
+	data := []byte(fmt.Sprintf(`
 version: 0.0
-os: linux
+os: %s
 files:
   - source: /
     destination: /opt/app
@@ -720,7 +785,7 @@ permissions:
       type: httpd_sys_content_t
       range:
         low: s0
-`)
+`, testOS()))
 	spec, err := Parse(data)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -741,16 +806,16 @@ permissions:
 // type field is rejected. The type is the minimum required field because
 // semanage fcontext always needs it.
 func TestParse_WithContextMissingType(t *testing.T) {
-	data := []byte(`
+	data := []byte(fmt.Sprintf(`
 version: 0.0
-os: linux
+os: %s
 permissions:
   - object: /opt/app
     type:
       - file
     context:
       user: system_u
-`)
+`, testOS()))
 	_, err := Parse(data)
 	if err == nil {
 		t.Fatal("expected error for context without type")
@@ -868,9 +933,9 @@ func TestValidateFileACL_NilACLs(t *testing.T) {
 func TestParseFile_ValidAppspec(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "appspec.yml")
-	content := []byte(`
+	content := []byte(fmt.Sprintf(`
 version: 0.0
-os: linux
+os: %s
 files:
   - source: /
     destination: /opt/app
@@ -881,7 +946,7 @@ permissions:
     mode: "0755"
     type:
       - file
-`)
+`, testOS()))
 	if err := os.WriteFile(path, content, 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -889,8 +954,8 @@ permissions:
 	if err != nil {
 		t.Fatalf("ParseFile: %v", err)
 	}
-	if spec.OS != "linux" {
-		t.Errorf("OS = %q, want linux", spec.OS)
+	if spec.OS != testOS() {
+		t.Errorf("OS = %q, want %s", spec.OS, testOS())
 	}
 	if len(spec.Files) != 1 {
 		t.Errorf("Files count = %d, want 1", len(spec.Files))
@@ -922,9 +987,9 @@ func TestParseFile_NotFound(t *testing.T) {
 // integration test than TestParsePermissionsLinux because it also checks that
 // group and the default pattern are populated.
 func TestParse_WithPermissions(t *testing.T) {
-	data := []byte(`
+	data := []byte(fmt.Sprintf(`
 version: 0.0
-os: linux
+os: %s
 files:
   - source: /
     destination: /opt/app
@@ -936,7 +1001,7 @@ permissions:
     mode: "0755"
     type:
       - file
-`)
+`, testOS()))
 	spec, err := Parse(data)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -960,14 +1025,14 @@ permissions:
 // script is preserved through parsing. The default is 3600s; a deployment
 // author may set a shorter or longer timeout for slow/fast scripts.
 func TestParse_WithHookTimeout(t *testing.T) {
-	data := []byte(`
+	data := []byte(fmt.Sprintf(`
 version: 0.0
-os: linux
+os: %s
 hooks:
   ApplicationStart:
     - location: scripts/start.sh
       timeout: 120
-`)
+`, testOS()))
 	spec, err := Parse(data)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -985,15 +1050,15 @@ hooks:
 // are correctly parsed. These control privilege escalation during lifecycle
 // hook execution.
 func TestParse_WithHookSudo(t *testing.T) {
-	data := []byte(`
+	data := []byte(fmt.Sprintf(`
 version: 0.0
-os: linux
+os: %s
 hooks:
   ValidateService:
     - location: scripts/validate.sh
       runas: deploy
       sudo: true
-`)
+`, testOS()))
 	spec, err := Parse(data)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -1014,9 +1079,9 @@ hooks:
 // is parsed through the full YAML pipeline and produces a valid ACL with
 // the expected entries. The rawACL struct uses a nested "entries" key.
 func TestParse_WithACLs(t *testing.T) {
-	data := []byte(`
+	data := []byte(fmt.Sprintf(`
 version: 0.0
-os: linux
+os: %s
 permissions:
   - object: /opt/app
     type:
@@ -1026,7 +1091,7 @@ permissions:
         - user:deploy:rwx
         - group:web:r-x
         - d:user::rwx
-`)
+`, testOS()))
 	spec, err := Parse(data)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -1043,5 +1108,110 @@ permissions:
 	}
 	if !p.ACLs.HasDefault() {
 		t.Error("should have default entry")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Platform-specific hook validation tests
+// ---------------------------------------------------------------------------
+
+// TestParse_RunAsOnWindowsRejects verifies that appspec files specifying runas
+// on Windows are rejected at parse time. AWS CodeDeploy does not support runas
+// on Windows Server, so this prevents deployments that would fail at runtime.
+func TestParse_RunAsOnWindowsRejects(t *testing.T) {
+	// Only test on Windows runtime; on other platforms the OS mismatch error
+	// happens first (which is also correct behavior)
+	if runtime.GOOS != "windows" {
+		t.Skip("test only runs on Windows")
+	}
+	data := []byte(`
+version: 0.0
+os: windows
+hooks:
+  ApplicationStart:
+    - location: scripts/start.bat
+      runas: Administrator
+`)
+	_, err := Parse(data)
+	if err == nil {
+		t.Fatal("expected error for runas on Windows")
+	}
+	if !strings.Contains(err.Error(), "runas is not supported on Windows") {
+		t.Errorf("expected runas error message, got: %v", err)
+	}
+}
+
+// TestParse_CumulativeTimeoutExceedsLimit verifies that lifecycle events with
+// total script timeouts exceeding 3600 seconds are rejected. AWS enforces this
+// limit to prevent indefinitely hanging deployments.
+func TestParse_CumulativeTimeoutExceedsLimit(t *testing.T) {
+	data := []byte(fmt.Sprintf(`
+version: 0.0
+os: %s
+hooks:
+  ApplicationStart:
+    - location: scripts/start1.sh
+      timeout: 1000
+    - location: scripts/start2.sh
+      timeout: 1000
+    - location: scripts/start3.sh
+      timeout: 1000
+    - location: scripts/start4.sh
+      timeout: 1000
+`, testOS()))
+	_, err := Parse(data)
+	if err == nil {
+		t.Fatal("expected error for cumulative timeout > 3600s")
+	}
+	if !strings.Contains(err.Error(), "exceeds maximum of 3600 seconds") {
+		t.Errorf("expected cumulative timeout error, got: %v", err)
+	}
+}
+
+// TestParse_CumulativeTimeoutAtLimit verifies that lifecycle events with total
+// script timeouts exactly at 3600 seconds are accepted.
+func TestParse_CumulativeTimeoutAtLimit(t *testing.T) {
+	data := []byte(fmt.Sprintf(`
+version: 0.0
+os: %s
+hooks:
+  ApplicationStart:
+    - location: scripts/start1.sh
+      timeout: 1200
+    - location: scripts/start2.sh
+      timeout: 1200
+    - location: scripts/start3.sh
+      timeout: 1200
+`, testOS()))
+	spec, err := Parse(data)
+	if err != nil {
+		t.Fatalf("unexpected error for cumulative timeout at 3600s: %v", err)
+	}
+	scripts := spec.Hooks["ApplicationStart"]
+	if len(scripts) != 3 {
+		t.Errorf("expected 3 scripts, got %d", len(scripts))
+	}
+}
+
+// TestParse_CumulativeTimeoutBelowLimit verifies that lifecycle events with
+// total script timeouts below 3600 seconds are accepted.
+func TestParse_CumulativeTimeoutBelowLimit(t *testing.T) {
+	data := []byte(fmt.Sprintf(`
+version: 0.0
+os: %s
+hooks:
+  BeforeInstall:
+    - location: scripts/prep1.sh
+      timeout: 300
+    - location: scripts/prep2.sh
+      timeout: 600
+`, testOS()))
+	spec, err := Parse(data)
+	if err != nil {
+		t.Fatalf("unexpected error for cumulative timeout < 3600s: %v", err)
+	}
+	scripts := spec.Hooks["BeforeInstall"]
+	if len(scripts) != 2 {
+		t.Errorf("expected 2 scripts, got %d", len(scripts))
 	}
 }

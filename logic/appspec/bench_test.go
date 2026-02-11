@@ -1,14 +1,17 @@
 package appspec
 
-import "testing"
+import (
+	"fmt"
+	"testing"
+)
 
 // BenchmarkParse measures appspec YAML parsing throughput.
 // This is on the hot path for every deployment: Install and lifecycle hook
 // commands all parse the appspec to determine files, hooks, and permissions.
 func BenchmarkParse(b *testing.B) {
-	data := []byte(`
+	data := []byte(fmt.Sprintf(`
 version: 0.0
-os: linux
+os: %s
 files:
   - source: /
     destination: /opt/app
@@ -28,7 +31,7 @@ permissions:
     type:
       - file
       - directory
-`)
+`, testOS()))
 	b.ResetTimer()
 	b.ReportAllocs()
 	for b.Loop() {

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -92,6 +93,24 @@ var (
 	supportedTypes           = []string{"file", "directory"}
 )
 
+const maxLifecycleEventTimeout = 3600 // seconds
+
+// runtimeOS maps Go's runtime.GOOS to appspec OS values.
+// CodeDeploy supports only "linux" and "windows" platforms.
+// Darwin (macOS) is treated as linux for local development/testing.
+func runtimeOS() string {
+	switch runtime.GOOS {
+	case "linux":
+		return "linux"
+	case "windows":
+		return "windows"
+	case "darwin":
+		return "linux" // Developers on macOS typically deploy to Linux
+	default:
+		return runtime.GOOS // Return as-is for clear error messages
+	}
+}
+
 // Parse parses an appspec.yml from raw YAML bytes and validates all sections.
 //
 //	spec, err := appspec.Parse(data)
@@ -117,8 +136,20 @@ func Parse(data []byte) (Spec, error) {
 		return Spec{}, err
 	}
 
+	currentOS := runtimeOS()
+	if spec.OS != currentOS {
+		return Spec{}, fmt.Errorf(
+			"appspec: platform mismatch - appspec specifies %q but agent is running on %q",
+			spec.OS, currentOS)
+	}
+
 	spec.Hooks, err = parseHooks(raw.Hooks)
 	if err != nil {
+		return Spec{}, err
+	}
+
+	// Validate platform-specific hook restrictions
+	if err := validateHookPlatform(spec.Hooks, spec.OS); err != nil {
 		return Spec{}, err
 	}
 
@@ -376,4 +407,25 @@ func parseFileExistsBehavior(val string) (string, error) {
 		}
 	}
 	return "", fmt.Errorf("appspec: invalid file_exists_behavior %q, must be one of DISALLOW,OVERWRITE,RETAIN", val)
+}
+
+// validateHookPlatform validates platform-specific hook restrictions matching AWS behavior.
+// Windows does not support runas. All lifecycle events have a cumulative timeout limit.
+func validateHookPlatform(hooks map[string][]Script, os string) error {
+	for event, scripts := range hooks {
+		totalTimeout := 0
+		for _, script := range scripts {
+			// AWS CodeDeploy does not support runas on Windows Server
+			if os == "windows" && script.RunAs != "" {
+				return fmt.Errorf("appspec: runas is not supported on Windows (event %s, script %s)", event, script.Location)
+			}
+			totalTimeout += script.Timeout
+		}
+		// AWS limits total timeout per lifecycle event to 3600 seconds
+		if totalTimeout > maxLifecycleEventTimeout {
+			return fmt.Errorf("appspec: total timeout for %s (%d seconds) exceeds maximum of %d seconds",
+				event, totalTimeout, maxLifecycleEventTimeout)
+		}
+	}
+	return nil
 }

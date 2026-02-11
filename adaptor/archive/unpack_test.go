@@ -4,17 +4,28 @@ import (
 	"archive/tar"
 	"archive/zip"
 	"compress/gzip"
+	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
+
+// testOS returns the appropriate OS value for test appspecs based on runtime.
+// Use this in tests instead of hardcoding "os: linux" to ensure tests pass on all platforms.
+func testOS() string {
+	if runtime.GOOS == "windows" {
+		return "windows"
+	}
+	return "linux"
+}
 
 // TestUnpackTar verifies tar extraction produces the expected files.
 func TestUnpackTar(t *testing.T) {
 	dir := t.TempDir()
 	tarPath := filepath.Join(dir, "bundle.tar")
 	createTarFile(t, tarPath, false, map[string]string{
-		"appspec.yml":        "version: 0.0\nos: linux\n",
+		"appspec.yml":        fmt.Sprintf("version: 0.0\nos: %s\n", testOS()),
 		"scripts/install.sh": "#!/bin/bash\necho hello\n",
 	})
 
@@ -33,7 +44,7 @@ func TestUnpackTgz(t *testing.T) {
 	dir := t.TempDir()
 	tgzPath := filepath.Join(dir, "bundle.tgz")
 	createTarFile(t, tgzPath, true, map[string]string{
-		"appspec.yml": "version: 0.0\nos: linux\n",
+		"appspec.yml": fmt.Sprintf("version: 0.0\nos: %s\n", testOS()),
 	})
 
 	destDir := filepath.Join(dir, "out")
@@ -50,7 +61,7 @@ func TestUnpackZip(t *testing.T) {
 	dir := t.TempDir()
 	zipPath := filepath.Join(dir, "bundle.zip")
 	createZipFile(t, zipPath, map[string]string{
-		"appspec.yml": "version: 0.0\nos: linux\n",
+		"appspec.yml": fmt.Sprintf("version: 0.0\nos: %s\n", testOS()),
 		"config.txt":  "key=value\n",
 	})
 
@@ -71,7 +82,7 @@ func TestStripLeadingDirectory(t *testing.T) {
 	dir := t.TempDir()
 	tarPath := filepath.Join(dir, "bundle.tar")
 	createTarFile(t, tarPath, false, map[string]string{
-		"myapp-v1/appspec.yml":        "version: 0.0\nos: linux\n",
+		"myapp-v1/appspec.yml":        fmt.Sprintf("version: 0.0\nos: %s\n", testOS()),
 		"myapp-v1/scripts/install.sh": "#!/bin/bash\n",
 	})
 
@@ -164,7 +175,7 @@ func TestUnpackDefaultBundleType(t *testing.T) {
 	dir := t.TempDir()
 	tarPath := filepath.Join(dir, "bundle.tar")
 	createTarFile(t, tarPath, false, map[string]string{
-		"appspec.yml": "version: 0.0\nos: linux\n",
+		"appspec.yml": fmt.Sprintf("version: 0.0\nos: %s\n", testOS()),
 	})
 
 	destDir := filepath.Join(dir, "out")

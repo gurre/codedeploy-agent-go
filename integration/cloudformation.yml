@@ -232,9 +232,23 @@ Resources:
             $Url = "https://github.com/gurre/codedeploy-agent-go/releases/download/v$Version/codedeploy-agent_$VersionDashed`_windows_x86_64.exe"
             $LogFile = "C:\codedeploy-agent\logs\agent-stdout.log"
             "Downloading agent from $Url" | Out-File -FilePath $LogFile
-            curl.exe -fsSLo $Binary $Url 2>>$LogFile
-            $Size = (Get-Item $Binary).Length
-            "Agent binary downloaded ($Size bytes)" | Out-File -Append -FilePath $LogFile
+            try {
+                $output = & curl.exe --ssl-no-revoke -fsSLo $Binary $Url 2>&1
+                if ($LASTEXITCODE -ne 0) {
+                    "ERROR: curl.exe failed with exit code $LASTEXITCODE" | Out-File -Append -FilePath $LogFile
+                    $output | Out-String | Out-File -Append -FilePath $LogFile
+                    exit $LASTEXITCODE
+                }
+                if (-not (Test-Path $Binary)) {
+                    "ERROR: Binary not found at $Binary after download" | Out-File -Append -FilePath $LogFile
+                    exit 1
+                }
+                $Size = (Get-Item $Binary).Length
+                "Agent binary downloaded ($Size bytes)" | Out-File -Append -FilePath $LogFile
+            } catch {
+                "ERROR: Exception during download: $_" | Out-File -Append -FilePath $LogFile
+                exit 1
+            }
             Start-Process -FilePath $Binary `
               -ArgumentList C:\codedeploy-agent\conf\codedeployagent.yml -WindowStyle Hidden `
               -RedirectStandardOutput C:\codedeploy-agent\logs\agent-run.log `
@@ -257,13 +271,16 @@ Resources:
       DeploymentGroupName: !Sub "${StackPrefix}-al2023"
       ServiceRoleArn: !GetAtt DeploymentRole.Arn
       DeploymentConfigName: CodeDeployDefault.AllAtOnce
-      Ec2TagFilters:
-        - Key: os-name
-          Value: al2023
-          Type: KEY_AND_VALUE
-        - Key: codedeploy-group
-          Value: !Ref StackPrefix
-          Type: KEY_AND_VALUE
+      Ec2TagSet:
+        Ec2TagSetList:
+          - Ec2TagGroup:
+              - Key: os-name
+                Value: al2023
+                Type: KEY_AND_VALUE
+          - Ec2TagGroup:
+              - Key: codedeploy-group
+                Value: !Ref StackPrefix
+                Type: KEY_AND_VALUE
 
   DgAl2:
     Type: AWS::CodeDeploy::DeploymentGroup
@@ -272,13 +289,16 @@ Resources:
       DeploymentGroupName: !Sub "${StackPrefix}-al2"
       ServiceRoleArn: !GetAtt DeploymentRole.Arn
       DeploymentConfigName: CodeDeployDefault.AllAtOnce
-      Ec2TagFilters:
-        - Key: os-name
-          Value: al2
-          Type: KEY_AND_VALUE
-        - Key: codedeploy-group
-          Value: !Ref StackPrefix
-          Type: KEY_AND_VALUE
+      Ec2TagSet:
+        Ec2TagSetList:
+          - Ec2TagGroup:
+              - Key: os-name
+                Value: al2
+                Type: KEY_AND_VALUE
+          - Ec2TagGroup:
+              - Key: codedeploy-group
+                Value: !Ref StackPrefix
+                Type: KEY_AND_VALUE
 
   DgUbuntu:
     Type: AWS::CodeDeploy::DeploymentGroup
@@ -287,13 +307,16 @@ Resources:
       DeploymentGroupName: !Sub "${StackPrefix}-ubuntu"
       ServiceRoleArn: !GetAtt DeploymentRole.Arn
       DeploymentConfigName: CodeDeployDefault.AllAtOnce
-      Ec2TagFilters:
-        - Key: os-name
-          Value: ubuntu
-          Type: KEY_AND_VALUE
-        - Key: codedeploy-group
-          Value: !Ref StackPrefix
-          Type: KEY_AND_VALUE
+      Ec2TagSet:
+        Ec2TagSetList:
+          - Ec2TagGroup:
+              - Key: os-name
+                Value: ubuntu
+                Type: KEY_AND_VALUE
+          - Ec2TagGroup:
+              - Key: codedeploy-group
+                Value: !Ref StackPrefix
+                Type: KEY_AND_VALUE
 
   DgWindows:
     Type: AWS::CodeDeploy::DeploymentGroup
@@ -302,13 +325,16 @@ Resources:
       DeploymentGroupName: !Sub "${StackPrefix}-windows"
       ServiceRoleArn: !GetAtt DeploymentRole.Arn
       DeploymentConfigName: CodeDeployDefault.AllAtOnce
-      Ec2TagFilters:
-        - Key: os-name
-          Value: windows
-          Type: KEY_AND_VALUE
-        - Key: codedeploy-group
-          Value: !Ref StackPrefix
-          Type: KEY_AND_VALUE
+      Ec2TagSet:
+        Ec2TagSetList:
+          - Ec2TagGroup:
+              - Key: os-name
+                Value: windows
+                Type: KEY_AND_VALUE
+          - Ec2TagGroup:
+              - Key: codedeploy-group
+                Value: !Ref StackPrefix
+                Type: KEY_AND_VALUE
 
 Outputs:
   BucketName:
