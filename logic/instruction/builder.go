@@ -16,6 +16,7 @@ type Builder struct {
 	copyTargets       map[string]string // destination -> source
 	mkdirTargets      map[string]bool
 	permissionTargets map[string]bool
+	skippedPaths      map[string]bool // paths to skip during cleanup (RETAIN behavior)
 }
 
 // NewBuilder creates a fresh instruction builder.
@@ -29,6 +30,7 @@ func NewBuilder() *Builder {
 		copyTargets:       make(map[string]string),
 		mkdirTargets:      make(map[string]bool),
 		permissionTargets: make(map[string]bool),
+		skippedPaths:      make(map[string]bool),
 	}
 }
 
@@ -153,6 +155,21 @@ func (b *Builder) MkdirTargets() []string {
 // Commands returns the accumulated command list.
 func (b *Builder) Commands() []Command {
 	return b.commands
+}
+
+// AddSkippedPath marks a path as retained from previous deployment.
+// The path should be skipped during cleanup to preserve existing files.
+func (b *Builder) AddSkippedPath(path string) {
+	b.skippedPaths[filepath.Clean(path)] = true
+}
+
+// SkippedPaths returns all paths marked for retention (should skip cleanup).
+func (b *Builder) SkippedPaths() []string {
+	paths := make([]string, 0, len(b.skippedPaths))
+	for k := range b.skippedPaths {
+		paths = append(paths, k)
+	}
+	return paths
 }
 
 // Build returns the finalized Instructions ready for JSON serialization.

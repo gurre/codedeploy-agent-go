@@ -1,0 +1,9 @@
+version: 0.0
+os: linux
+file_exists_behavior: OVERWRITE
+files:
+  - source: content/
+    destination: /opt/cdagent-test-feb
+hooks:
+  ValidateService:
+    - location: scripts/validate_service.sh

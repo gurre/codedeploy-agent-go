@@ -1,0 +1,21 @@
+version: 0.0
+os: linux
+files:
+  - source: content/webdata/
+    destination: /opt/cdagent-test-selinux
+permissions:
+  - object: /opt/cdagent-test-selinux
+    pattern: "**"
+    mode: "0755"
+    type:
+      - directory
+      - file
+    context:
+      user: system_u
+      role: object_r
+      type: httpd_sys_content_t
+      range:
+        low: s0
+hooks:
+  ValidateService:
+    - location: scripts/validate_service.sh

@@ -1,0 +1,10 @@
+version: 0.0
+os: linux
+files:
+  - source: content/
+    destination: /opt/cdagent-test-feb
+hooks:
+  BeforeInstall:
+    - location: scripts/cleanup.sh
+  ValidateService:
+    - location: scripts/validate_service.sh

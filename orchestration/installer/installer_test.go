@@ -565,6 +565,84 @@ func TestInstall_SourceNotFound(t *testing.T) {
 	}
 }
 
+// TestInstall_FileExistsBehavior_RetainWithCleanup verifies that when a file
+// is marked for RETAIN, it is not removed during cleanup from the previous
+// deployment. This tests the critical interaction between cleanup timing and
+// file_exists_behavior that mimics the integration test scenario:
+// 1. Deployment 2 (OVERWRITE) writes a file and adds it to cleanup
+// 2. Deployment 3 (RETAIN) should preserve the file from deployment 2
+// Without the skip logic, cleanup would delete the file before the RETAIN
+// check, causing the file to be re-copied with new content.
+func TestInstall_FileExistsBehavior_RetainWithCleanup(t *testing.T) {
+	archiveDir, instructionsDir, destDir := setupDirs(t)
+
+	// Deployment 2: Create a file that will be retained
+	createFile(t, filepath.Join(archiveDir, "testfile.txt"), "deployment-2-content")
+
+	mock := newMockFileOp()
+	inst := NewInstaller(mock, slog.Default())
+
+	destFile := filepath.Join(destDir, "testfile.txt")
+	spec := appspec.Spec{
+		Files: []appspec.FileMapping{
+			{Source: "testfile.txt", Destination: destDir},
+		},
+	}
+
+	// Deployment 2: OVERWRITE (creates the file)
+	if err := inst.Install("dg-1", archiveDir, instructionsDir, spec, "OVERWRITE"); err != nil {
+		t.Fatalf("Deployment 2 Install: %v", err)
+	}
+
+	// Verify file was copied in deployment 2
+	if !mock.copiedTo(destFile) {
+		t.Errorf("deployment 2 should copy file to %q", destFile)
+	}
+
+	// Physically create the file so the RETAIN check sees it exists
+	createFile(t, destFile, "deployment-2-content")
+
+	// Deployment 3: Create a NEW archive with different content
+	archiveDir2 := filepath.Join(t.TempDir(), "archive2")
+	mkdirAll(t, archiveDir2)
+	createFile(t, filepath.Join(archiveDir2, "testfile.txt"), "deployment-3-content")
+
+	// Reset mock to track deployment 3 calls separately
+	mock2 := newMockFileOp()
+	inst2 := NewInstaller(mock2, slog.Default())
+
+	// Deployment 3: RETAIN (should preserve deployment 2 file)
+	spec3 := appspec.Spec{
+		Files: []appspec.FileMapping{
+			{Source: "testfile.txt", Destination: destDir},
+		},
+		FileExistsBehavior: "RETAIN",
+	}
+
+	if err := inst2.Install("dg-1", archiveDir2, instructionsDir, spec3, "OVERWRITE"); err != nil {
+		t.Fatalf("Deployment 3 Install: %v", err)
+	}
+
+	// The critical assertion: file should NOT be removed during cleanup
+	if mock2.removeCalled(destFile) {
+		t.Errorf("RETAIN file %q should not be removed during cleanup", destFile)
+	}
+
+	// File should NOT be copied again (RETAIN skips copy)
+	if mock2.copiedTo(destFile) {
+		t.Errorf("RETAIN should skip copy to %q", destFile)
+	}
+
+	// Verify the file still exists with original content
+	content, err := os.ReadFile(destFile)
+	if err != nil {
+		t.Fatalf("read retained file: %v", err)
+	}
+	if string(content) != "deployment-2-content" {
+		t.Errorf("retained file should have deployment-2 content, got: %q", string(content))
+	}
+}
+
 // --- test helpers ---
 
 // setupDirs creates the three directories needed by every test: an archive

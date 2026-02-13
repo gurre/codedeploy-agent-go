@@ -1,0 +1,29 @@
+version: 0.0
+os: linux
+files:
+  - source: content/config.txt
+    destination: /opt/cdagent-test
+  - source: content/data.json
+    destination: /opt/cdagent-test
+  - source: content/nested/
+    destination: /opt/cdagent-test/nested
+permissions:
+  - object: /opt/cdagent-test/config.txt
+    mode: "0644"
+    owner: root
+    group: root
+    type:
+      - file
+  - object: /opt/cdagent-test/data.json
+    mode: "0600"
+    owner: root
+    type:
+      - file
+  - object: /opt/cdagent-test/nested
+    pattern: "**"
+    mode: "0755"
+    type:
+      - directory
+hooks:
+  ValidateService:
+    - location: scripts/validate_service.sh

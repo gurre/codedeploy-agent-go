@@ -1,0 +1,17 @@
+version: 0.0
+os: linux
+hooks:
+  BeforeInstall:
+    - location: scripts/before_install_1.sh
+      timeout: 60
+    - location: scripts/before_install_2.sh
+      timeout: 60
+    - location: scripts/before_install_3.sh
+      timeout: 60
+  AfterInstall:
+    - location: scripts/after_install_1.sh
+      timeout: 60
+    - location: scripts/after_install_2.sh
+      timeout: 60
+  ValidateService:
+    - location: scripts/validate_service.sh

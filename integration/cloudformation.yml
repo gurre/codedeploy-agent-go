@@ -131,7 +131,9 @@ Resources:
             VERSION="${AgentVersion}"
             URL="https://github.com/gurre/codedeploy-agent-go/releases/download/v$VERSION/codedeploy-agent_${!VERSION}_linux_amd64.rpm"
             curl -fsSLo /tmp/codedeploy-agent.rpm "$URL"
+            dnf install -y policycoreutils-python-utils
             dnf install -y /tmp/codedeploy-agent.rpm
+            setenforce 1
             cat > /etc/codedeploy-agent/conf/codedeployagent.yml <<'CONF'
             wait_between_runs: 5
             CONF
@@ -196,6 +198,7 @@ Resources:
             wait_between_runs: 5
             CONF
             systemctl enable --now codedeploy-agent
+            apt-get update && apt-get install -y acl || echo "Warning: ACL installation failed"
 
   InstanceWindows:
     Type: AWS::EC2::Instance

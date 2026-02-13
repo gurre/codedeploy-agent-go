@@ -56,16 +56,16 @@ func (inst *Installer) Install(
 		return fmt.Errorf("installer: mkdir instructions: %w", err)
 	}
 
-	// Execute cleanup from previous deployment
-	cleanupPath := filepath.Join(instructionsDir, deploymentGroupID+"-cleanup")
-	if err := inst.executeCleanup(cleanupPath); err != nil {
-		return fmt.Errorf("installer: cleanup: %w", err)
-	}
-
-	// Generate instructions from appspec
+	// Generate instructions from appspec (determines which files to retain)
 	builder, err := inst.generateInstructions(archiveDir, spec, fileExistsBehavior)
 	if err != nil {
 		return fmt.Errorf("installer: generate: %w", err)
+	}
+
+	// Execute cleanup from previous deployment (skip retained files)
+	cleanupPath := filepath.Join(instructionsDir, deploymentGroupID+"-cleanup")
+	if err := inst.executeCleanup(cleanupPath, builder.SkippedPaths()); err != nil {
+		return fmt.Errorf("installer: cleanup: %w", err)
 	}
 
 	// Write install instructions JSON
@@ -87,7 +87,7 @@ func (inst *Installer) Install(
 	return nil
 }
 
-func (inst *Installer) executeCleanup(cleanupPath string) error {
+func (inst *Installer) executeCleanup(cleanupPath string, skippedPaths []string) error {
 	data, err := os.ReadFile(cleanupPath)
 	if os.IsNotExist(err) {
 		return nil
@@ -96,8 +96,26 @@ func (inst *Installer) executeCleanup(cleanupPath string) error {
 		return err
 	}
 
+	// Build skip set for O(1) lookups
+	skipSet := make(map[string]bool, len(skippedPaths))
+	for _, p := range skippedPaths {
+		skipSet[filepath.Clean(p)] = true
+	}
+
 	entries := instruction.ParseRemoveCommands(string(data))
 	for _, entry := range entries {
+		cleanPath := filepath.Clean(entry.Path)
+
+		// Skip if path is retained
+		if skipSet[cleanPath] {
+			continue
+		}
+
+		// Skip if path is ancestor of any retained path
+		if isAncestorOfAny(cleanPath, skippedPaths) {
+			continue
+		}
+
 		if entry.IsContext {
 			_ = inst.fileOp.RemoveContext(entry.Path)
 		} else {
@@ -106,6 +124,23 @@ func (inst *Installer) executeCleanup(cleanupPath string) error {
 	}
 
 	return os.Remove(cleanupPath)
+}
+
+// isAncestorOfAny checks if path is an ancestor directory of any retained path.
+// This prevents cleaning parent directories when child files are retained.
+func isAncestorOfAny(path string, retained []string) bool {
+	path = filepath.Clean(path)
+	for _, r := range retained {
+		r = filepath.Clean(r)
+		// Check if path is a prefix of r (parent directory)
+		if len(path) < len(r) {
+			rel, err := filepath.Rel(path, r)
+			if err == nil && !filepath.IsAbs(rel) && rel != ".." && rel[:3] != ".."+string(filepath.Separator) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (inst *Installer) generateInstructions(
@@ -197,6 +232,7 @@ func (inst *Installer) generateFileCopy(
 		case "OVERWRITE":
 			return builder.Copy(source, destination)
 		case "RETAIN":
+			builder.AddSkippedPath(destination)
 			return nil // Skip
 		default:
 			return fmt.Errorf("invalid file_exists_behavior: %s", feb)

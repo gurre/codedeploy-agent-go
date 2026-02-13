@@ -158,13 +158,18 @@ upload_bundles() {
     log "Creating and uploading bundle ZIPs"
     mkdir -p "${TMP_DIR}"
 
-    (cd "${SCRIPT_DIR}/bundles/linux" && zip -r "${TMP_DIR}/bundle-linux.zip" .)
-    (cd "${SCRIPT_DIR}/bundles/windows" && zip -r "${TMP_DIR}/bundle-windows.zip" .)
-
-    aws s3 cp "${TMP_DIR}/bundle-linux.zip" \
-        "s3://${BUCKET}/bundles/bundle-linux.zip" --region "${REGION}"
-    aws s3 cp "${TMP_DIR}/bundle-windows.zip" \
-        "s3://${BUCKET}/bundles/bundle-windows.zip" --region "${REGION}"
+    # Upload all bundles in integration/bundles/
+    for bundle_dir in "${SCRIPT_DIR}"/bundles/*; do
+        if [[ ! -d "${bundle_dir}" ]]; then
+            continue
+        fi
+        local bundle_name
+        bundle_name=$(basename "${bundle_dir}")
+        log "Zipping ${bundle_name}"
+        (cd "${bundle_dir}" && zip -r "${TMP_DIR}/bundle-${bundle_name}.zip" .)
+        aws s3 cp "${TMP_DIR}/bundle-${bundle_name}.zip" \
+            "s3://${BUCKET}/bundles/bundle-${bundle_name}.zip" --region "${REGION}"
+    done
 }
 
 # ---------------------------------------------------------------------------
@@ -249,6 +254,25 @@ run_ssm_command() {
         --region "${REGION}" \
         --query "StandardOutputContent" \
         --output text
+}
+
+# Find deployment directory by searching for deployment ID.
+# Returns full path to deployment directory or empty string if not found.
+find_deployment_dir() {
+    local instance_id="$1"
+    local deployment_id="$2"
+    local os_name="$3"
+    local root_dir="${4:-/opt/codedeploy-agent/deployment-root}"
+
+    if [[ "${os_name}" == "windows" ]]; then
+        # Windows: search in C:\codedeploy-agent\deployment-root\*\{deployment-id}
+        local search_cmd="Get-ChildItem -Path 'C:\\codedeploy-agent\\deployment-root\\*\\${deployment_id}' -Directory -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty FullName"
+        run_ssm_command "${instance_id}" "AWS-RunPowerShellScript" "commands=['${search_cmd}']" 2>/dev/null || echo ""
+    else
+        # Linux: use find to search for deployment ID directory
+        local search_cmd="find ${root_dir} -maxdepth 2 -type d -name '${deployment_id}' -print -quit 2>/dev/null || echo ''"
+        run_ssm_command "${instance_id}" "AWS-RunShellScript" "commands=['${search_cmd}']" 2>/dev/null || echo ""
+    fi
 }
 
 # ---------------------------------------------------------------------------
@@ -382,24 +406,318 @@ verify_hooks() {
     return 0
 }
 
+# Collect comprehensive logs from Linux instances.
+# Includes journalctl, main log, rotated logs, shared deployment log, and per-deployment logs.
+collect_logs_linux() {
+    local instance_id="$1"
+    local deployment_id="${2:-}"
+
+    local output=""
+
+    # Collect journalctl output (last 500 lines)
+    output+="$(echo '=== journalctl (CodeDeploy Agent Service) ===')"
+    output+=$'\n'
+    output+="$(run_ssm_command "${instance_id}" "AWS-RunShellScript" \
+        "commands=['journalctl -u codedeploy-agent --no-pager -n 500 2>/dev/null || echo \"(no journal)\"']" 2>/dev/null || echo "(failed to collect)")"
+    output+=$'\n\n'
+
+    # Collect main agent log (last 1000 lines)
+    output+="$(echo '=== Main Agent Log (codedeploy-agent.log) ===')"
+    output+=$'\n'
+    output+="$(run_ssm_command "${instance_id}" "AWS-RunShellScript" \
+        "commands=['tail -n 1000 /var/log/aws/codedeploy-agent/codedeploy-agent.log 2>/dev/null || echo \"(file not found)\"']" 2>/dev/null || echo "(failed to collect)")"
+    output+=$'\n\n'
+
+    # Collect rotated logs (.log.1 through .log.8, last 500 lines each)
+    for i in {1..8}; do
+        local log_file="/var/log/aws/codedeploy-agent/codedeploy-agent.log.${i}"
+        output+="$(echo "=== Rotated Agent Log (codedeploy-agent.log.${i}) ===")"
+        output+=$'\n'
+        output+="$(run_ssm_command "${instance_id}" "AWS-RunShellScript" \
+            "commands=['tail -n 500 ${log_file} 2>/dev/null || echo \"(file not found)\"']" 2>/dev/null || echo "(failed to collect)")"
+        output+=$'\n\n'
+    done
+
+    # Collect shared deployment log (last 500 lines)
+    output+="$(echo '=== Shared Deployment Log (codedeploy-agent-deployments.log) ===')"
+    output+=$'\n'
+    output+="$(run_ssm_command "${instance_id}" "AWS-RunShellScript" \
+        "commands=['tail -n 500 /opt/codedeploy-agent/deployment-root/deployment-logs/codedeploy-agent-deployments.log 2>/dev/null || echo \"(file not found)\"']" 2>/dev/null || echo "(failed to collect)")"
+    output+=$'\n\n'
+
+    # If deployment_id provided, collect per-deployment logs
+    if [[ -n "${deployment_id}" ]]; then
+        output+="$(echo "=== Per-Deployment Script Log (scripts.log for ${deployment_id}) ===")"
+        output+=$'\n'
+
+        local dep_dir
+        dep_dir=$(find_deployment_dir "${instance_id}" "${deployment_id}" "linux")
+
+        if [[ -n "${dep_dir}" && "${dep_dir}" != "(file not found)" ]]; then
+            output+="Found deployment directory: ${dep_dir}"
+            output+=$'\n\n'
+
+            # Collect scripts.log (full file)
+            output+="$(run_ssm_command "${instance_id}" "AWS-RunShellScript" \
+                "commands=['cat ${dep_dir}/logs/scripts.log 2>/dev/null || echo \"(file not found)\"']" 2>/dev/null || echo "(failed to collect)")"
+            output+=$'\n\n'
+
+            # List deployment directory structure
+            output+="$(echo '=== Deployment Directory Structure ===')"
+            output+=$'\n'
+            output+="$(run_ssm_command "${instance_id}" "AWS-RunShellScript" \
+                "commands=['ls -lR ${dep_dir} 2>/dev/null || echo \"(failed to list)\"']" 2>/dev/null || echo "(failed to collect)")"
+            output+=$'\n'
+        else
+            output+="Deployment directory not found for ${deployment_id}"
+            output+=$'\n'
+        fi
+    fi
+
+    echo "${output}"
+}
+
+# Collect comprehensive logs from Windows instances.
+# Includes agent logs, UserData log, and per-deployment logs.
+collect_logs_windows() {
+    local instance_id="$1"
+    local deployment_id="${2:-}"
+
+    local output=""
+
+    # Collect agent logs (last 500 lines each)
+    output+="$(echo '=== Agent stdout Log (agent-stdout.log) ===')"
+    output+=$'\n'
+    output+="$(run_ssm_command "${instance_id}" "AWS-RunPowerShellScript" \
+        "commands=['Get-Content C:\\codedeploy-agent\\logs\\agent-stdout.log -Tail 500 -ErrorAction SilentlyContinue']" 2>/dev/null || echo "(failed to collect)")"
+    output+=$'\n\n'
+
+    output+="$(echo '=== Agent run Log (agent-run.log) ===')"
+    output+=$'\n'
+    output+="$(run_ssm_command "${instance_id}" "AWS-RunPowerShellScript" \
+        "commands=['Get-Content C:\\codedeploy-agent\\logs\\agent-run.log -Tail 500 -ErrorAction SilentlyContinue']" 2>/dev/null || echo "(failed to collect)")"
+    output+=$'\n\n'
+
+    output+="$(echo '=== Agent stderr Log (agent-stderr.log) ===')"
+    output+=$'\n'
+    output+="$(run_ssm_command "${instance_id}" "AWS-RunPowerShellScript" \
+        "commands=['Get-Content C:\\codedeploy-agent\\logs\\agent-stderr.log -Tail 500 -ErrorAction SilentlyContinue']" 2>/dev/null || echo "(failed to collect)")"
+    output+=$'\n\n'
+
+    # Collect UserData log (last 500 lines)
+    output+="$(echo '=== UserData Execution Log ===')"
+    output+=$'\n'
+    output+="$(run_ssm_command "${instance_id}" "AWS-RunPowerShellScript" \
+        "commands=['Get-Content C:\\ProgramData\\Amazon\\EC2-Windows\\Launch\\Log\\UserdataExecution.log -Tail 500 -ErrorAction SilentlyContinue']" 2>/dev/null || echo "(failed to collect)")"
+    output+=$'\n\n'
+
+    # If deployment_id provided, collect per-deployment logs
+    if [[ -n "${deployment_id}" ]]; then
+        output+="$(echo "=== Per-Deployment Script Log (scripts.log for ${deployment_id}) ===")"
+        output+=$'\n'
+
+        local dep_dir
+        dep_dir=$(find_deployment_dir "${instance_id}" "${deployment_id}" "windows")
+
+        if [[ -n "${dep_dir}" && "${dep_dir}" != "(file not found)" ]]; then
+            output+="Found deployment directory: ${dep_dir}"
+            output+=$'\n\n'
+
+            # Collect scripts.log (full file)
+            output+="$(run_ssm_command "${instance_id}" "AWS-RunPowerShellScript" \
+                "commands=['Get-Content \"${dep_dir}\\logs\\scripts.log\" -ErrorAction SilentlyContinue']" 2>/dev/null || echo "(failed to collect)")"
+            output+=$'\n\n'
+
+            # List deployment directory structure
+            output+="$(echo '=== Deployment Directory Structure ===')"
+            output+=$'\n'
+            output+="$(run_ssm_command "${instance_id}" "AWS-RunPowerShellScript" \
+                "commands=['Get-ChildItem -Path \"${dep_dir}\" -Recurse -ErrorAction SilentlyContinue | Format-Table -AutoSize']" 2>/dev/null || echo "(failed to collect)")"
+            output+=$'\n'
+        else
+            output+="Deployment directory not found for ${deployment_id}"
+            output+=$'\n'
+        fi
+    fi
+
+    echo "${output}"
+}
+
+# Main log collection orchestrator.
+# Collects comprehensive logs from an instance, optionally for a specific deployment.
+# Parameters:
+#   instance_id  - EC2 instance ID
+#   os_name      - OS name (al2023, al2, ubuntu, windows)
+#   deployment_id - Optional deployment ID for per-deployment logs
+#   bundle_name  - Optional bundle name for filename
 collect_logs() {
     local instance_id="$1"
     local os_name="$2"
+    local deployment_id="${3:-}"
+    local bundle_name="${4:-}"
 
-    log "Collecting agent logs from ${os_name} (${instance_id})"
     mkdir -p "${TMP_DIR}"
 
-    local agent_log
-    if [[ "${os_name}" == "windows" ]]; then
-        agent_log=$(run_ssm_command "${instance_id}" "AWS-RunPowerShellScript" \
-            "commands=['echo \"=== agent-stdout.log ===\"; Get-Content C:\\codedeploy-agent\\logs\\agent-stdout.log -ErrorAction SilentlyContinue; echo \"=== agent-run.log ===\"; Get-Content C:\\codedeploy-agent\\logs\\agent-run.log -ErrorAction SilentlyContinue; echo \"=== agent-stderr.log ===\"; Get-Content C:\\codedeploy-agent\\logs\\agent-stderr.log -ErrorAction SilentlyContinue; echo \"=== UserData execution log ===\"; Get-Content C:\\ProgramData\\Amazon\\EC2-Windows\\Launch\\Log\\UserdataExecution.log -ErrorAction SilentlyContinue']" 2>/dev/null || echo "(no log)")
+    # Determine output filename
+    local output_file
+    if [[ -n "${deployment_id}" && -n "${bundle_name}" ]]; then
+        output_file="${TMP_DIR}/integ-${os_name}-${bundle_name}-${deployment_id}.log"
+        log "Collecting logs from ${os_name} (${instance_id}) for deployment ${deployment_id}"
     else
-        agent_log=$(run_ssm_command "${instance_id}" "AWS-RunShellScript" \
-            "commands=['echo \"=== journalctl ===\"; journalctl -u codedeploy-agent --no-pager 2>/dev/null || echo \"(no journal)\"; echo \"=== codedeploy-agent.log ===\"; cat /var/log/aws/codedeploy-agent/codedeploy-agent.log 2>/dev/null || echo \"(no log)\"']" 2>/dev/null || echo "(no log)")
+        output_file="${TMP_DIR}/integ-${os_name}-agent.log"
+        log "Collecting general logs from ${os_name} (${instance_id})"
     fi
 
-    echo "${agent_log}" > "${TMP_DIR}/integ-${os_name}-agent.log"
-    log "Saved to ${TMP_DIR}/integ-${os_name}-agent.log"
+    # Create header with deployment context
+    local header=""
+    header+="======================================================================"
+    header+=$'\n'
+    header+="Log Collection: ${os_name}"
+    header+=$'\n'
+    if [[ -n "${deployment_id}" ]]; then
+        header+="Deployment ID: ${deployment_id}"
+        header+=$'\n'
+    fi
+    if [[ -n "${bundle_name}" ]]; then
+        header+="Bundle: ${bundle_name}"
+        header+=$'\n'
+    fi
+    header+="Timestamp: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    header+=$'\n'
+    header+="======================================================================"
+    header+=$'\n\n'
+
+    # Collect OS-specific logs
+    local log_content
+    if [[ "${os_name}" == "windows" ]]; then
+        log_content=$(collect_logs_windows "${instance_id}" "${deployment_id}")
+    else
+        log_content=$(collect_logs_linux "${instance_id}" "${deployment_id}")
+    fi
+
+    # Write to file
+    echo "${header}${log_content}" > "${output_file}"
+    log "Saved to ${output_file}"
+}
+
+# ---------------------------------------------------------------------------
+# Feature-specific test helpers
+# ---------------------------------------------------------------------------
+test_bundle() {
+    local bundle_name="$1"
+    local deployment_group="$2"
+    local instance_id="$3"
+    local expected_proof="$4"
+
+    log "Testing bundle ${bundle_name} on ${deployment_group}"
+
+    local deployment_id
+    deployment_id=$(aws deploy create-deployment \
+        --application-name "${CODEDEPLOY_APP}" \
+        --deployment-group-name "${deployment_group}" \
+        --revision "revisionType=S3,s3Location={bucket=${BUCKET},key=bundles/bundle-${bundle_name}.zip,bundleType=zip}" \
+        --region "${REGION}" \
+        --query "deploymentId" \
+        --output text)
+
+    log "Created deployment ${deployment_id}"
+
+    local test_result=0
+    if ! wait_deployment "${deployment_id}"; then
+        err "Deployment ${deployment_id} failed"
+        test_result=1
+    fi
+
+    if [[ ${test_result} -eq 0 ]]; then
+        if ! verify_proof "${instance_id}" "${expected_proof}"; then
+            test_result=1
+        fi
+    fi
+
+    # Extract OS name from instance_id for log collection
+    local os_name
+    case "${instance_id}" in
+        "${INSTANCE_ID_AL2023}") os_name="al2023" ;;
+        "${INSTANCE_ID_AL2}") os_name="al2" ;;
+        "${INSTANCE_ID_UBUNTU}") os_name="ubuntu" ;;
+        "${INSTANCE_ID_WINDOWS}") os_name="windows" ;;
+        *) os_name="unknown" ;;
+    esac
+
+    # Collect logs regardless of test result
+    collect_logs "${instance_id}" "${os_name}" "${deployment_id}" "${bundle_name}" || true
+
+    return ${test_result}
+}
+
+verify_proof() {
+    local instance_id="$1"
+    local expected="$2"
+
+    log "Verifying proof on ${instance_id}"
+
+    local proof
+    proof=$(run_ssm_command "${instance_id}" "AWS-RunShellScript" \
+        "commands=['cat /tmp/codedeploy-integ-proof 2>/dev/null || echo MISSING']")
+
+    if echo "${proof}" | grep -q "${expected}"; then
+        log "  [PASS] Found ${expected}"
+        return 0
+    else
+        err "  [FAIL] Expected ${expected}, got: ${proof}"
+        return 1
+    fi
+}
+
+test_file_exists_behavior() {
+    local dg="$1"
+    local instance_id="$2"
+
+    log "Testing file_exists_behavior sequence"
+
+    # Deploy initial
+    if ! test_bundle "file-exists-initial" "${dg}" "${instance_id}" "INITIAL"; then
+        err "Initial deployment failed"
+        return 1
+    fi
+
+    # Verify content
+    local content
+    content=$(run_ssm_command "${instance_id}" "AWS-RunShellScript" \
+        "commands=['cat /opt/cdagent-test-feb/testfile.txt']")
+    if ! echo "${content}" | grep -q "INITIAL"; then
+        err "Initial content wrong: ${content}"
+        return 1
+    fi
+
+    # Deploy with OVERWRITE
+    if ! test_bundle "file-exists-overwrite" "${dg}" "${instance_id}" "OVERWRITTEN"; then
+        err "Overwrite deployment failed"
+        return 1
+    fi
+
+    content=$(run_ssm_command "${instance_id}" "AWS-RunShellScript" \
+        "commands=['cat /opt/cdagent-test-feb/testfile.txt']")
+    if ! echo "${content}" | grep -q "OVERWRITTEN"; then
+        err "Overwrite failed: ${content}"
+        return 1
+    fi
+
+    # Deploy with RETAIN
+    if ! test_bundle "file-exists-retain" "${dg}" "${instance_id}" "RETAINED"; then
+        err "Retain deployment failed"
+        return 1
+    fi
+
+    content=$(run_ssm_command "${instance_id}" "AWS-RunShellScript" \
+        "commands=['cat /opt/cdagent-test-feb/testfile.txt']")
+    if ! echo "${content}" | grep -q "OVERWRITTEN"; then
+        err "Retain failed - content changed: ${content}"
+        return 1
+    fi
+
+    log "file_exists_behavior sequence PASSED"
+    return 0
 }
 
 # ---------------------------------------------------------------------------
@@ -455,8 +773,64 @@ do_test() {
             failed=$((failed + 1))
         fi
 
-        collect_logs "${iid}" "${os_name}"
+        # Collect deployment-specific logs
+        collect_logs "${iid}" "${os_name}" "${deploy_id}" "linux" || true
     done
+
+    # Collect general logs as fallback for debugging
+    log "Collecting general agent logs from all instances"
+    for i in "${!OS_NAMES[@]}"; do
+        local os_name="${OS_NAMES[$i]}"
+        local iid
+        iid=$(get_instance_id "${os_name}")
+        collect_logs "${iid}" "${os_name}" || true
+    done
+
+    # Feature-specific tests
+    log ""
+    log "=============================="
+    log " Running Feature Tests"
+    log "=============================="
+
+    # files-basic test (AL2023, Ubuntu)
+    log "Testing files-basic feature"
+    if ! test_bundle "files-basic" "${DG_AL2023}" "${INSTANCE_ID_AL2023}" "FILES_BASIC_PASS"; then
+        err "files-basic test failed on AL2023"
+        failed=$((failed + 1))
+    fi
+
+    if ! test_bundle "files-basic" "${DG_UBUNTU}" "${INSTANCE_ID_UBUNTU}" "FILES_BASIC_PASS"; then
+        err "files-basic test failed on Ubuntu"
+        failed=$((failed + 1))
+    fi
+
+    # permissions-acl test (Ubuntu)
+    log "Testing permissions-acl feature"
+    if ! test_bundle "permissions-acl" "${DG_UBUNTU}" "${INSTANCE_ID_UBUNTU}" "ACL_PASS"; then
+        err "permissions-acl test failed on Ubuntu"
+        failed=$((failed + 1))
+    fi
+
+    # permissions-selinux test (AL2023)
+    log "Testing permissions-selinux feature"
+    if ! test_bundle "permissions-selinux" "${DG_AL2023}" "${INSTANCE_ID_AL2023}" "SELINUX_PASS"; then
+        err "permissions-selinux test failed on AL2023"
+        failed=$((failed + 1))
+    fi
+
+    # hooks-multiple test (AL2023)
+    log "Testing hooks-multiple feature"
+    if ! test_bundle "hooks-multiple" "${DG_AL2023}" "${INSTANCE_ID_AL2023}" "HOOKS_MULTIPLE_PASS"; then
+        err "hooks-multiple test failed on AL2023"
+        failed=$((failed + 1))
+    fi
+
+    # file_exists_behavior sequence (AL2023)
+    log "Testing file_exists_behavior feature"
+    if ! test_file_exists_behavior "${DG_AL2023}" "${INSTANCE_ID_AL2023}"; then
+        err "file_exists_behavior test failed on AL2023"
+        failed=$((failed + 1))
+    fi
 
     # Print summary.
     echo ""
@@ -468,11 +842,18 @@ do_test() {
     for i in "${!OS_NAMES[@]}"; do
         printf "%-12s %s\n" "${OS_NAMES[$i]}" "${TEST_RESULTS[$i]}"
     done
+    echo ""
+    echo "Feature Tests:"
+    echo "  files-basic (AL2023, Ubuntu)"
+    echo "  permissions-acl (Ubuntu)"
+    echo "  permissions-selinux (AL2023)"
+    echo "  hooks-multiple (AL2023)"
+    echo "  file_exists_behavior (AL2023)"
     echo "=============================="
     echo ""
 
     if [[ ${failed} -gt 0 ]]; then
-        err "${failed} OS(es) failed"
+        err "${failed} test(s) failed"
         return 1
     fi
 
