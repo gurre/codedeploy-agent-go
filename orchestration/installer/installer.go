@@ -230,6 +230,8 @@ func (inst *Installer) generateFileCopy(
 		case "DISALLOW":
 			return fmt.Errorf("file already exists at %s", destination)
 		case "OVERWRITE":
+			// Add to skip list to prevent cleanup from deleting before overwrite
+			builder.AddSkippedPath(destination)
 			return builder.Copy(source, destination)
 		case "RETAIN":
 			builder.AddSkippedPath(destination)

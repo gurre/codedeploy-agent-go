@@ -565,6 +565,89 @@ func TestInstall_SourceNotFound(t *testing.T) {
 	}
 }
 
+// TestInstall_FileExistsBehavior_OverwriteWithCleanup reproduces the AL2023
+// integration test failure scenario where:
+// 1. Deployment 1 creates a file with content "INITIAL"
+// 2. Deployment 2 with file_exists_behavior: OVERWRITE should replace it
+// The test verifies that cleanup from deployment 1 doesn't incorrectly delete
+// the file before deployment 2 can overwrite it. Without proper skip logic,
+// the cleanup phase would remove the file, causing the OVERWRITE to fail.
+func TestInstall_FileExistsBehavior_OverwriteWithCleanup(t *testing.T) {
+	archiveDir1 := filepath.Join(t.TempDir(), "archive1")
+	archiveDir2 := filepath.Join(t.TempDir(), "archive2")
+	instructionsDir := filepath.Join(t.TempDir(), "instructions")
+	destDir := filepath.Join(t.TempDir(), "dest")
+	mkdirAll(t, archiveDir1)
+	mkdirAll(t, archiveDir2)
+	mkdirAll(t, instructionsDir)
+	mkdirAll(t, destDir)
+
+	// Deployment 1: Initial file creation
+	createFile(t, filepath.Join(archiveDir1, "testfile.txt"), "INITIAL")
+
+	mock1 := newMockFileOp()
+	inst1 := NewInstaller(mock1, slog.Default())
+
+	destFile := filepath.Join(destDir, "testfile.txt")
+	spec1 := appspec.Spec{
+		Files: []appspec.FileMapping{
+			{Source: "testfile.txt", Destination: destDir},
+		},
+	}
+
+	// Deployment 1 uses DISALLOW (default) to create the file
+	if err := inst1.Install("dg-1", archiveDir1, instructionsDir, spec1, "DISALLOW"); err != nil {
+		t.Fatalf("Deployment 1 Install: %v", err)
+	}
+
+	// Verify deployment 1 copied the file
+	if !mock1.copiedTo(destFile) {
+		t.Errorf("deployment 1 should copy file to %q", destFile)
+	}
+
+	// Verify cleanup file was written
+	cleanupPath := filepath.Join(instructionsDir, "dg-1-cleanup")
+	cleanupData, err := os.ReadFile(cleanupPath)
+	if err != nil {
+		t.Fatalf("read cleanup file after deployment 1: %v", err)
+	}
+	if !strings.Contains(string(cleanupData), destFile) {
+		t.Errorf("cleanup file should contain %q, got: %q", destFile, string(cleanupData))
+	}
+
+	// Physically create the file so deployment 2 sees it exists
+	createFile(t, destFile, "INITIAL")
+
+	// Deployment 2: Overwrite with new content
+	createFile(t, filepath.Join(archiveDir2, "testfile.txt"), "OVERWRITTEN")
+
+	mock2 := newMockFileOp()
+	inst2 := NewInstaller(mock2, slog.Default())
+
+	spec2 := appspec.Spec{
+		Files: []appspec.FileMapping{
+			{Source: "testfile.txt", Destination: destDir},
+		},
+		FileExistsBehavior: "OVERWRITE",
+	}
+
+	// Deployment 2 uses OVERWRITE to replace the file
+	if err := inst2.Install("dg-1", archiveDir2, instructionsDir, spec2, "DISALLOW"); err != nil {
+		t.Fatalf("Deployment 2 Install: %v", err)
+	}
+
+	// The critical assertion: file should NOT be removed during cleanup
+	// because it's being overwritten, not deleted
+	if mock2.removeCalled(destFile) {
+		t.Errorf("OVERWRITE file %q should not be removed during cleanup", destFile)
+	}
+
+	// File should be copied (overwritten)
+	if !mock2.copiedTo(destFile) {
+		t.Errorf("OVERWRITE should copy to %q", destFile)
+	}
+}
+
 // TestInstall_FileExistsBehavior_RetainWithCleanup verifies that when a file
 // is marked for RETAIN, it is not removed during cleanup from the previous
 // deployment. This tests the critical interaction between cleanup timing and
