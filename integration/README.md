@@ -108,7 +108,7 @@ Use the filename to identify which test generated the logs:
 
 Example workflow after a test failure:
 1. Identify the failed test from console output
-2. Find the corresponding log file: `tmp/integ-ubuntu-permissions-acl-d-*.log`
+2. Find the corresponding log file: `tmp/integ-al2023-permissions-selinux-d-*.log`
 3. Check the `scripts.log` section for hook execution errors
 4. Review the main agent log section for agent-level errors
 5. Compare timestamps across sections to understand the sequence of events

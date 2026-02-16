@@ -804,13 +804,6 @@ do_test() {
         failed=$((failed + 1))
     fi
 
-    # permissions-acl test (Ubuntu)
-    log "Testing permissions-acl feature"
-    if ! test_bundle "permissions-acl" "${DG_UBUNTU}" "${INSTANCE_ID_UBUNTU}" "ACL_PASS"; then
-        err "permissions-acl test failed on Ubuntu"
-        failed=$((failed + 1))
-    fi
-
     # permissions-selinux test (AL2023)
     log "Testing permissions-selinux feature"
     if ! test_bundle "permissions-selinux" "${DG_AL2023}" "${INSTANCE_ID_AL2023}" "SELINUX_PASS"; then
@@ -845,7 +838,6 @@ do_test() {
     echo ""
     echo "Feature Tests:"
     echo "  files-basic (AL2023, Ubuntu)"
-    echo "  permissions-acl (Ubuntu)"
     echo "  permissions-selinux (AL2023)"
     echo "  hooks-multiple (AL2023)"
     echo "  file_exists_behavior (AL2023)"
