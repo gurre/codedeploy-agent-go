@@ -115,6 +115,13 @@ nfpms:
         type: config
         file_info:
           mode: 0755
+        packager: deb
+      - src: adaptor/servicefile/codedeploy-agent
+        dst: /etc/init.d/codedeploy-agent
+        type: config
+        file_info:
+          mode: 0755
+        packager: apk
       - src: certs/host-agent-deployment-signer-ca-chain.pem
         dst: /opt/codedeploy-agent/certs/host-agent-deployment-signer-ca-chain.pem
       - dst: /opt/codedeploy-agent/deployment-root
