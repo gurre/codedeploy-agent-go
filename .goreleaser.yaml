@@ -92,6 +92,10 @@ nfpms:
       - rpm
       - apk
       - archlinux
+    scripts:
+      postinstall: packaging/scripts/postinstall.sh
+      preremove: packaging/scripts/preremove.sh
+      postremove: packaging/scripts/postremove.sh
     bindir: /opt/codedeploy-agent/bin
     contents:
       - src: >-
@@ -105,8 +109,7 @@ nfpms:
         dst: /opt/codedeploy-agent/bin/codedeploy-agent
         type: symlink
       - src: adaptor/servicefile/codedeploy-agent.service
-        dst: /etc/systemd/system/codedeploy-agent.service
-        type: config
+        dst: /usr/lib/systemd/system/codedeploy-agent.service
       - src: adaptor/servicefile/codedeploy-agent
         dst: /etc/init.d/codedeploy-agent
         type: config
