@@ -52,13 +52,20 @@ type Client struct {
 // NewClient creates a CodeDeploy Commands service client.
 // Pass a non-nil transport to apply a custom round-tripper (e.g. proxy);
 // nil uses Go's default transport. The client always uses an 80s timeout.
+// When useDualStack is true and no endpointOverride is set, the client uses
+// the dual-stack endpoint (codedeploy-commands.{region}.api.aws) which
+// resolves to both IPv4 and IPv6 addresses.
 //
-//	client := codedeployctl.NewClient(cfg.Credentials(), "us-east-1", "", nil, slog.Default())
+//	client := codedeployctl.NewClient(cfg.Credentials(), "us-east-1", "", false, nil, slog.Default())
 //	cmd, err := client.PollHostCommand(ctx, "arn:aws:ec2:...")
-func NewClient(creds aws.CredentialsProvider, region, endpointOverride string, transport http.RoundTripper, logger *slog.Logger) *Client {
+func NewClient(creds aws.CredentialsProvider, region, endpointOverride string, useDualStack bool, transport http.RoundTripper, logger *slog.Logger) *Client {
 	endpoint := endpointOverride
 	if endpoint == "" {
-		endpoint = fmt.Sprintf("https://codedeploy-commands.%s.amazonaws.com", region)
+		if useDualStack {
+			endpoint = fmt.Sprintf("https://codedeploy-commands.%s.api.aws", region)
+		} else {
+			endpoint = fmt.Sprintf("https://codedeploy-commands.%s.amazonaws.com", region)
+		}
 	}
 
 	return &Client{

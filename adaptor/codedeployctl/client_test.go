@@ -29,7 +29,7 @@ func staticCredentials() aws.CredentialsProviderFunc {
 // newTestClient creates a Client pointed at the given httptest server URL.
 func newTestClient(t *testing.T, serverURL string) *Client {
 	t.Helper()
-	return NewClient(staticCredentials(), "us-east-1", serverURL, nil, slog.Default())
+	return NewClient(staticCredentials(), "us-east-1", serverURL, false, nil, slog.Default())
 }
 
 // assertHeader verifies a request header has the expected value.
@@ -556,10 +556,32 @@ func TestIsThrottle_NormalError(t *testing.T) {
 // default endpoint URL when no override is provided. The endpoint format is a
 // contract with the CodeDeploy Commands service.
 func TestNewClient_DefaultEndpoint(t *testing.T) {
-	client := NewClient(staticCredentials(), "eu-west-1", "", nil, slog.Default())
+	client := NewClient(staticCredentials(), "eu-west-1", "", false, nil, slog.Default())
 	want := "https://codedeploy-commands.eu-west-1.amazonaws.com"
 	if client.endpoint != want {
 		t.Errorf("endpoint = %q, want %q", client.endpoint, want)
+	}
+}
+
+// TestNewClient_DualStackEndpoint verifies that NewClient with useDualStack=true
+// produces the *.api.aws dual-stack endpoint format. This endpoint resolves to
+// both IPv4 and IPv6 addresses, enabling connectivity on dual-stack instances.
+func TestNewClient_DualStackEndpoint(t *testing.T) {
+	client := NewClient(staticCredentials(), "eu-north-1", "", true, nil, slog.Default())
+	want := "https://codedeploy-commands.eu-north-1.api.aws"
+	if client.endpoint != want {
+		t.Errorf("endpoint = %q, want %q", client.endpoint, want)
+	}
+}
+
+// TestNewClient_EndpointOverrideTakesPrecedenceOverDualStack verifies that an
+// explicit endpoint override takes precedence over dual-stack. Operators must
+// be able to point the agent at a custom endpoint regardless of dual-stack.
+func TestNewClient_EndpointOverrideTakesPrecedenceOverDualStack(t *testing.T) {
+	override := "https://custom.endpoint.com"
+	client := NewClient(staticCredentials(), "us-east-1", override, true, nil, slog.Default())
+	if client.endpoint != override {
+		t.Errorf("endpoint = %q, want %q", client.endpoint, override)
 	}
 }
 
@@ -590,7 +612,7 @@ func TestVersionHeader_Present(t *testing.T) {
 // preserving the adaptor's 80s timeout.
 func TestNewClient_CustomTransport(t *testing.T) {
 	custom := &http.Transport{}
-	client := NewClient(staticCredentials(), "us-east-1", "", custom, slog.Default())
+	client := NewClient(staticCredentials(), "us-east-1", "", false, custom, slog.Default())
 	if client.httpClient.Transport != custom {
 		t.Error("expected custom transport to be used")
 	}

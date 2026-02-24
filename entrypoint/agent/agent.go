@@ -123,6 +123,7 @@ func Run(ctx context.Context, configPath string) error {
 		awsCfg.Credentials,
 		identity.Region,
 		cfg.DeployControlEndpoint,
+		cfg.UseDualStack,
 		proxyTransport,
 		logger,
 	)
@@ -139,6 +140,7 @@ func Run(ctx context.Context, configPath string) error {
 		identity.Region,
 		cfg.S3EndpointOverride,
 		cfg.UseFIPSMode,
+		cfg.UseDualStack,
 		s3ProxyClient,
 		logger,
 	)

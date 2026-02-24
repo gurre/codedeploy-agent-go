@@ -23,16 +23,22 @@ type Downloader struct {
 // NewDownloader creates an S3 downloader from an AWS config.
 // Pass a non-nil httpClient to use a custom transport (e.g. for proxy support);
 // nil uses the default from the AWS config.
+// When useDualStack is true and no endpointOverride is set, the SDK resolves to
+// s3.dualstack.{region}.amazonaws.com. This can coexist with useFIPS, producing
+// s3-fips.dualstack.{region}.amazonaws.com.
 //
-//	dl := s3download.NewDownloader(cfg, "us-east-1", "", false, nil, slog.Default())
+//	dl := s3download.NewDownloader(cfg, "us-east-1", "", false, false, nil, slog.Default())
 //	err := dl.Download(ctx, bucket, key, version, etag, destPath)
-func NewDownloader(awsCfg aws.Config, region, endpointOverride string, useFIPS bool, httpClient *http.Client, logger *slog.Logger) *Downloader {
+func NewDownloader(awsCfg aws.Config, region, endpointOverride string, useFIPS, useDualStack bool, httpClient *http.Client, logger *slog.Logger) *Downloader {
 	opts := func(o *s3.Options) {
 		o.Region = region
 		if endpointOverride != "" {
 			o.BaseEndpoint = aws.String(endpointOverride)
 		} else if useFIPS {
 			o.BaseEndpoint = aws.String(fmt.Sprintf("https://s3-fips.%s.amazonaws.com", region))
+		}
+		if useDualStack && endpointOverride == "" {
+			o.EndpointOptions.UseDualStackEndpoint = aws.DualStackEndpointStateEnabled
 		}
 		if httpClient != nil {
 			o.HTTPClient = httpClient

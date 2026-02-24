@@ -238,6 +238,7 @@ http_read_timeout: 120
 kill_agent_max_wait_time_seconds: 300
 max_revisions: 7
 use_fips_mode: true
+use_dual_stack: true
 enable_auth_policy: true
 enable_deployments_log: true
 disable_imds_v1: true
@@ -287,11 +288,59 @@ disable_imds_v1: true
 	if cfg.MaxRevisions != 7 {
 		t.Errorf("MaxRevisions = %d", cfg.MaxRevisions)
 	}
+	if !cfg.UseDualStack {
+		t.Error("UseDualStack should be true")
+	}
 	if !cfg.EnableAuthPolicy {
 		t.Error("EnableAuthPolicy should be true")
 	}
 	if !cfg.EnableDeploymentsLog {
 		t.Error("EnableDeploymentsLog should be true")
+	}
+}
+
+// TestLoadAgentUseDualStack verifies that use_dual_stack: true in YAML sets the
+// UseDualStack field on the config. This flag controls dual-stack endpoint
+// resolution for IPv6 support on dual-stack EC2 instances.
+func TestLoadAgentUseDualStack(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yml")
+	data := `
+use_dual_stack: true
+`
+	if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadAgent(path)
+	if err != nil {
+		t.Fatalf("LoadAgent: %v", err)
+	}
+
+	if !cfg.UseDualStack {
+		t.Error("UseDualStack should be true")
+	}
+}
+
+// TestLoadAgentUseDualStackDefault verifies that UseDualStack defaults to false
+// when not set in the config file.
+func TestLoadAgentUseDualStackDefault(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yml")
+	data := `
+root_dir: /custom/root
+`
+	if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadAgent(path)
+	if err != nil {
+		t.Fatalf("LoadAgent: %v", err)
+	}
+
+	if cfg.UseDualStack {
+		t.Error("UseDualStack should default to false")
 	}
 }
 

@@ -40,6 +40,8 @@ type Agent struct {
 
 	// UseFIPSMode enables FIPS-compliant endpoints.
 	UseFIPSMode bool
+	// UseDualStack enables dual-stack (IPv4+IPv6) endpoints for all services.
+	UseDualStack bool
 	// EnableAuthPolicy enables authorization policy enforcement.
 	EnableAuthPolicy bool
 	// EnableDeploymentsLog enables the per-deployment log file.

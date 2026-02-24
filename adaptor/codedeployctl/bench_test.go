@@ -41,7 +41,7 @@ func BenchmarkDoRequest(b *testing.B) {
 			SecretAccessKey: "SECRET",
 		}, nil
 	})
-	client := NewClient(creds, "us-east-1", server.URL, nil, logger)
+	client := NewClient(creds, "us-east-1", server.URL, false, nil, logger)
 	ctx := context.Background()
 
 	b.ResetTimer()

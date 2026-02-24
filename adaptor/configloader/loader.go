@@ -45,6 +45,7 @@ type rawConfig struct {
 	KillAgentMaxWaitTime      *int   `yaml:"kill_agent_max_wait_time_seconds"`
 	MaxRevisions              *int   `yaml:"max_revisions"`
 	UseFIPSMode               *bool  `yaml:"use_fips_mode"`
+	UseDualStack              *bool  `yaml:"use_dual_stack"`
 	EnableAuthPolicy          *bool  `yaml:"enable_auth_policy"`
 	EnableDeploymentsLog      *bool  `yaml:"enable_deployments_log"`
 	DisableIMDSv1             *bool  `yaml:"disable_imds_v1"`
@@ -129,6 +130,9 @@ func LoadAgent(path string) (config.Agent, error) {
 	}
 	if raw.UseFIPSMode != nil {
 		cfg.UseFIPSMode = *raw.UseFIPSMode
+	}
+	if raw.UseDualStack != nil {
+		cfg.UseDualStack = *raw.UseDualStack
 	}
 	if raw.EnableAuthPolicy != nil {
 		cfg.EnableAuthPolicy = *raw.EnableAuthPolicy
