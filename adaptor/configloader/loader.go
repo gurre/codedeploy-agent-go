@@ -40,6 +40,7 @@ type rawConfig struct {
 	DeployControlEndpoint     string `yaml:"deploy_control_endpoint"`
 	S3EndpointOverride        string `yaml:"s3_endpoint_override"`
 	WaitBetweenRuns           *int   `yaml:"wait_between_runs"`
+	WaitBetweenRunsActive     *int   `yaml:"wait_between_runs_active"`
 	WaitAfterError            *int   `yaml:"wait_after_error"`
 	HTTPReadTimeout           *int   `yaml:"http_read_timeout"`
 	KillAgentMaxWaitTime      *int   `yaml:"kill_agent_max_wait_time_seconds"`
@@ -115,6 +116,9 @@ func LoadAgent(path string) (config.Agent, error) {
 	}
 	if raw.WaitBetweenRuns != nil {
 		cfg.PollInterval = time.Duration(*raw.WaitBetweenRuns) * time.Second
+	}
+	if raw.WaitBetweenRunsActive != nil {
+		cfg.ActivePollInterval = time.Duration(*raw.WaitBetweenRunsActive) * time.Second
 	}
 	if raw.WaitAfterError != nil {
 		cfg.ErrorBackoff = time.Duration(*raw.WaitAfterError) * time.Second

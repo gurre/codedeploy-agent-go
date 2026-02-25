@@ -55,7 +55,7 @@ func TestProcessCommand_Success(t *testing.T) {
 	tracker := &stubDeploymentTracker{}
 
 	p := NewPoller(svc, exec, parser, tracker, "i-host",
-		time.Millisecond, time.Millisecond, time.Second, slog.Default())
+		time.Millisecond, time.Millisecond, time.Millisecond, time.Second, slog.Default())
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -123,7 +123,7 @@ func TestProcessCommand_AcknowledgeFailed(t *testing.T) {
 	tracker := &stubDeploymentTracker{}
 
 	p := NewPoller(svc, exec, parser, tracker, "i-host",
-		time.Millisecond, time.Millisecond, time.Second, slog.Default())
+		time.Millisecond, time.Millisecond, time.Millisecond, time.Second, slog.Default())
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -185,7 +185,7 @@ func TestProcessCommand_ExecutionError(t *testing.T) {
 	tracker := &stubDeploymentTracker{}
 
 	p := NewPoller(svc, exec, parser, tracker, "i-host",
-		time.Millisecond, time.Millisecond, time.Second, slog.Default())
+		time.Millisecond, time.Millisecond, time.Millisecond, time.Second, slog.Default())
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -248,7 +248,7 @@ func TestProcessCommand_IsNoop(t *testing.T) {
 	tracker := &stubDeploymentTracker{}
 
 	p := NewPoller(svc, exec, parser, tracker, "i-host",
-		time.Millisecond, time.Millisecond, time.Second, slog.Default())
+		time.Millisecond, time.Millisecond, time.Millisecond, time.Second, slog.Default())
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -292,7 +292,7 @@ func TestRecoverFromCrash(t *testing.T) {
 	tracker := &stubDeploymentTracker{inProgress: "hc-crashed"}
 
 	p := NewPoller(svc, nil, nil, tracker, "i-host",
-		time.Millisecond, time.Millisecond, time.Second, slog.Default())
+		time.Millisecond, time.Millisecond, time.Millisecond, time.Second, slog.Default())
 
 	p.RecoverFromCrash(context.Background())
 
@@ -318,7 +318,7 @@ func TestRun_GracefulShutdown(t *testing.T) {
 	}
 
 	p := NewPoller(svc, nil, nil, &stubDeploymentTracker{}, "i-host",
-		time.Millisecond, time.Millisecond, time.Second, slog.Default())
+		time.Millisecond, time.Millisecond, time.Millisecond, time.Second, slog.Default())
 
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)
@@ -376,7 +376,7 @@ func TestRun_ErrorCountResets(t *testing.T) {
 	// Without reset, count=2 → backoff in [1s, 2s], cumulative range [1.75s, 3.5s].
 	// With reset, count=0 → backoff in [250ms, 500ms], all four polls finish in ~2s.
 	p := NewPoller(svc, nil, nil, &stubDeploymentTracker{}, "i-host",
-		time.Millisecond, 500*time.Millisecond, time.Second, slog.Default())
+		time.Millisecond, time.Millisecond, 500*time.Millisecond, time.Second, slog.Default())
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -398,7 +398,7 @@ func TestRun_ErrorCountResets(t *testing.T) {
 // This tests the dependency-inverted throttle detection via the local throttler interface.
 func TestComputeBackoff_Throttle(t *testing.T) {
 	p := NewPoller(nil, nil, nil, nil, "",
-		time.Millisecond, 30*time.Second, time.Second, slog.Default())
+		time.Millisecond, time.Millisecond, 30*time.Second, time.Second, slog.Default())
 
 	err := &throttleError{msg: "Throttling: Rate exceeded"}
 	delay := p.computeBackoff(err)
@@ -412,7 +412,7 @@ func TestComputeBackoff_Throttle(t *testing.T) {
 // throttle delay.
 func TestComputeBackoff_NonThrottle(t *testing.T) {
 	p := NewPoller(nil, nil, nil, nil, "",
-		time.Millisecond, 30*time.Second, time.Second, slog.Default())
+		time.Millisecond, time.Millisecond, 30*time.Second, time.Second, slog.Default())
 	p.consecutiveErrors = 0
 
 	err := fmt.Errorf("some network error")
@@ -421,6 +421,95 @@ func TestComputeBackoff_NonThrottle(t *testing.T) {
 	if delay < 15*time.Second || delay > 30*time.Second {
 		t.Errorf("non-throttle backoff = %v, want in [15s, 30s]", delay)
 	}
+}
+
+// TestRun_ActivePollInterval verifies that while a command goroutine is executing,
+// the poller uses the shorter activePollInterval. When no commands are in-flight,
+// it uses the longer pollInterval. This reduces worst-case latency for picking up
+// subsequent lifecycle events during an active deployment.
+func TestRun_ActivePollInterval(t *testing.T) {
+	// Use durations large enough to distinguish but small enough for a fast test.
+	// idleInterval is long enough that if the poller uses it during active commands,
+	// the test times out.
+	const (
+		idleInterval   = 2 * time.Second
+		activeInterval = 10 * time.Millisecond
+	)
+
+	// executeCh blocks the command goroutine so it stays "active"
+	executeCh := make(chan struct{})
+	// secondPollCh signals the second poll arrived while the command is still executing
+	secondPollCh := make(chan struct{}, 1)
+
+	var pollCount atomic.Int32
+
+	svc := &stubCommandService{
+		pollFunc: func(ctx context.Context, _ string) (*HostCommand, error) {
+			n := pollCount.Add(1)
+			switch n {
+			case 1:
+				// Return a command that will block in Execute
+				return &HostCommand{
+					HostCommandIdentifier: "hc-active",
+					HostIdentifier:        "i-host",
+					DeploymentExecutionID: "exec-active",
+					CommandName:           "Install",
+				}, nil
+			case 2:
+				// Second poll arrived while command is still executing
+				select {
+				case secondPollCh <- struct{}{}:
+				default:
+				}
+				<-ctx.Done()
+				return nil, ctx.Err()
+			default:
+				<-ctx.Done()
+				return nil, ctx.Err()
+			}
+		},
+		getSpecFunc: func(_ context.Context, _, _ string) (*Envelope, string, error) {
+			return &Envelope{Format: "TEXT/JSON", Payload: `{}`}, "CodeDeploy", nil
+		},
+		acknowledgeFunc: func(_ context.Context, _ string, _ *Envelope) (string, error) {
+			return "InProgress", nil
+		},
+		completeFunc: func(_ context.Context, _, _ string, _ *Envelope) error {
+			return nil
+		},
+	}
+
+	spec := deployspec.Spec{DeploymentID: "d-ACTIVE", DeploymentGroupID: "dg-1"}
+	parser := &stubSpecParser{spec: spec}
+	exec := &stubCommandExecutor{
+		executeFunc: func(_ context.Context, _ string, _ deployspec.Spec) (string, error) {
+			// Block until test releases
+			<-executeCh
+			return "ok", nil
+		},
+	}
+	tracker := &stubDeploymentTracker{}
+
+	p := NewPoller(svc, exec, parser, tracker, "i-host",
+		idleInterval, activeInterval, time.Millisecond, time.Second, slog.Default())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go func() { _ = p.Run(ctx) }()
+
+	// The second poll should arrive within activeInterval (~10ms), not idleInterval (2s).
+	// If the poller incorrectly uses idleInterval, this times out at 500ms.
+	select {
+	case <-secondPollCh:
+		// Active interval was used — command goroutine is still blocked
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("second poll did not arrive quickly — active interval may not be in effect")
+	}
+
+	// Release the blocked command
+	close(executeCh)
+	cancel()
 }
 
 // throttleError is a test double that implements the throttler interface.
@@ -578,7 +667,7 @@ func TestProcessCommand_GetSpecError(t *testing.T) {
 	}
 
 	p := NewPoller(svc, nil, nil, &stubDeploymentTracker{}, "i-host",
-		time.Millisecond, time.Millisecond, time.Second, slog.Default())
+		time.Millisecond, time.Millisecond, time.Millisecond, time.Second, slog.Default())
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -621,7 +710,7 @@ func TestProcessCommand_NonCodeDeploy(t *testing.T) {
 	}
 
 	p := NewPoller(svc, nil, nil, &stubDeploymentTracker{}, "i-host",
-		time.Millisecond, time.Millisecond, time.Second, slog.Default())
+		time.Millisecond, time.Millisecond, time.Millisecond, time.Second, slog.Default())
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -664,7 +753,7 @@ func TestProcessCommand_NilSpec(t *testing.T) {
 	}
 
 	p := NewPoller(svc, nil, nil, &stubDeploymentTracker{}, "i-host",
-		time.Millisecond, time.Millisecond, time.Second, slog.Default())
+		time.Millisecond, time.Millisecond, time.Millisecond, time.Second, slog.Default())
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -708,7 +797,7 @@ func TestProcessCommand_ParseError(t *testing.T) {
 
 	parser := &stubSpecParser{err: fmt.Errorf("invalid JSON")}
 	p := NewPoller(svc, nil, parser, &stubDeploymentTracker{}, "i-host",
-		time.Millisecond, time.Millisecond, time.Second, slog.Default())
+		time.Millisecond, time.Millisecond, time.Millisecond, time.Second, slog.Default())
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

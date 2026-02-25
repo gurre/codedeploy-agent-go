@@ -30,6 +30,8 @@ type Agent struct {
 	KillAgentMaxWait time.Duration
 	// PollInterval is the delay between polling cycles.
 	PollInterval time.Duration
+	// ActivePollInterval is the delay between polling cycles when commands are executing.
+	ActivePollInterval time.Duration
 	// ErrorBackoff is the delay after a polling error.
 	ErrorBackoff time.Duration
 	// HTTPReadTimeout is the HTTP read timeout for API calls.
@@ -63,6 +65,7 @@ func Default() Agent {
 		OnPremisesConfigFile:      "/etc/codedeploy-agent/conf/codedeploy.onpremises.yml",
 		KillAgentMaxWait:          7200 * time.Second,
 		PollInterval:              30 * time.Second,
+		ActivePollInterval:        10 * time.Second,
 		ErrorBackoff:              30 * time.Second,
 		HTTPReadTimeout:           80 * time.Second,
 		MaxRevisions:              5,

@@ -233,6 +233,7 @@ proxy_uri: http://proxy:8080
 deploy_control_endpoint: https://custom.endpoint.com
 s3_endpoint_override: https://s3.custom.com
 wait_between_runs: 30
+wait_between_runs_active: 5
 wait_after_error: 60
 http_read_timeout: 120
 kill_agent_max_wait_time_seconds: 300
@@ -275,6 +276,9 @@ disable_imds_v1: true
 	}
 	if cfg.S3EndpointOverride != "https://s3.custom.com" {
 		t.Errorf("S3EndpointOverride = %q", cfg.S3EndpointOverride)
+	}
+	if cfg.ActivePollInterval != 5*time.Second {
+		t.Errorf("ActivePollInterval = %v, want 5s", cfg.ActivePollInterval)
 	}
 	if cfg.ErrorBackoff != 60*time.Second {
 		t.Errorf("ErrorBackoff = %v", cfg.ErrorBackoff)

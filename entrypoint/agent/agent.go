@@ -171,7 +171,7 @@ func Run(ctx context.Context, configPath string) error {
 	p := poller.NewPoller(
 		svcBridge, exec, parserBridge, ft,
 		identity.HostID,
-		cfg.PollInterval, cfg.ErrorBackoff, cfg.KillAgentMaxWait,
+		cfg.PollInterval, cfg.ActivePollInterval, cfg.ErrorBackoff, cfg.KillAgentMaxWait,
 		logger,
 	)
 

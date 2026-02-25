@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gurre/codedeploy-agent-go/logic/backoff"
@@ -69,43 +70,46 @@ type DeploymentTracker interface {
 
 // Poller polls the CodeDeploy Commands service for work.
 type Poller struct {
-	commandService    CommandService
-	executor          CommandExecutor
-	specParser        SpecParser
-	tracker           DeploymentTracker
-	logger            *slog.Logger
-	hostIdentifier    string
-	pollInterval      time.Duration
-	errorBackoff      time.Duration
-	shutdownWait      time.Duration
-	sem               chan struct{} // bounded concurrency
-	wg                sync.WaitGroup
-	consecutiveErrors int
+	commandService     CommandService
+	executor           CommandExecutor
+	specParser         SpecParser
+	tracker            DeploymentTracker
+	logger             *slog.Logger
+	hostIdentifier     string
+	pollInterval       time.Duration
+	activePollInterval time.Duration
+	errorBackoff       time.Duration
+	shutdownWait       time.Duration
+	sem                chan struct{} // bounded concurrency
+	wg                 sync.WaitGroup
+	activeCommands     atomic.Int32
+	consecutiveErrors  int
 }
 
 // NewPoller creates a poller.
 //
-//	p := poller.NewPoller(svc, exec, parser, tracker, hostID, 30*time.Second, 30*time.Second, 7200*time.Second, logger)
+//	p := poller.NewPoller(svc, exec, parser, tracker, hostID, 30*time.Second, 10*time.Second, 30*time.Second, 7200*time.Second, logger)
 func NewPoller(
 	svc CommandService,
 	exec CommandExecutor,
 	parser SpecParser,
 	tracker DeploymentTracker,
 	hostIdentifier string,
-	pollInterval, errorBackoff, shutdownWait time.Duration,
+	pollInterval, activePollInterval, errorBackoff, shutdownWait time.Duration,
 	logger *slog.Logger,
 ) *Poller {
 	return &Poller{
-		commandService: svc,
-		executor:       exec,
-		specParser:     parser,
-		tracker:        tracker,
-		hostIdentifier: hostIdentifier,
-		pollInterval:   pollInterval,
-		errorBackoff:   errorBackoff,
-		shutdownWait:   shutdownWait,
-		logger:         logger,
-		sem:            make(chan struct{}, maxConcurrent),
+		commandService:     svc,
+		executor:           exec,
+		specParser:         parser,
+		tracker:            tracker,
+		hostIdentifier:     hostIdentifier,
+		pollInterval:       pollInterval,
+		activePollInterval: activePollInterval,
+		errorBackoff:       errorBackoff,
+		shutdownWait:       shutdownWait,
+		logger:             logger,
+		sem:                make(chan struct{}, maxConcurrent),
 	}
 }
 
@@ -157,10 +161,15 @@ func (p *Poller) Run(ctx context.Context) error {
 
 		p.consecutiveErrors = 0
 
+		interval := p.pollInterval
+		if p.activeCommands.Load() > 0 {
+			interval = p.activePollInterval
+		}
+
 		select {
 		case <-ctx.Done():
 			return p.shutdown()
-		case <-time.After(p.pollInterval):
+		case <-time.After(interval):
 		}
 	}
 }
@@ -196,8 +205,10 @@ func (p *Poller) poll(ctx context.Context) error {
 	// Dispatch to goroutine pool
 	p.sem <- struct{}{} // acquire
 	p.wg.Add(1)
+	p.activeCommands.Add(1)
 	go func() {
 		defer func() {
+			p.activeCommands.Add(-1)
 			<-p.sem // release
 			p.wg.Done()
 		}()
