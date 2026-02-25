@@ -297,13 +297,19 @@ func (p *Poller) processCommand(ctx context.Context, cmd *HostCommand) {
 }
 
 func (p *Poller) reportError(ctx context.Context, hci string, err error) {
-	p.logger.Error("command failed", "error", err, "hostCommandIdentifier", hci)
-
 	var payload string
 	var se *diagnostic.ScriptError
 	if errors.As(err, &se) {
+		p.logger.Error("script failed",
+			"script", se.ScriptName,
+			"error", se.Message,
+			"output", se.Log,
+			"hostCommandIdentifier", hci)
 		payload = diagnostic.BuildFromScriptErr(se)
 	} else {
+		p.logger.Error("command failed",
+			"error", err,
+			"hostCommandIdentifier", hci)
 		payload = diagnostic.BuildFromError(err)
 	}
 

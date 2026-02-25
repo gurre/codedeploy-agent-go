@@ -997,6 +997,115 @@ func TestProcessCommand_NonScriptErrorPayload(t *testing.T) {
 	cancel()
 }
 
+// captureSlogHandler is a test double that records slog.Records for assertion.
+// It implements slog.Handler by storing every emitted record.
+type captureSlogHandler struct {
+	mu      sync.Mutex
+	records []slog.Record
+}
+
+func (h *captureSlogHandler) Enabled(_ context.Context, _ slog.Level) bool { return true }
+func (h *captureSlogHandler) WithAttrs(_ []slog.Attr) slog.Handler         { return h }
+func (h *captureSlogHandler) WithGroup(_ string) slog.Handler              { return h }
+func (h *captureSlogHandler) Handle(_ context.Context, r slog.Record) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.records = append(h.records, r)
+	return nil
+}
+
+// findRecord returns the first record whose message matches msg, or nil.
+func (h *captureSlogHandler) findRecord(msg string) *slog.Record {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for i := range h.records {
+		if h.records[i].Message == msg {
+			return &h.records[i]
+		}
+	}
+	return nil
+}
+
+// attrValue returns the string value of the first attribute with the given key
+// in the record, or "" if not found.
+func attrValue(r *slog.Record, key string) string {
+	var val string
+	r.Attrs(func(a slog.Attr) bool {
+		if a.Key == key {
+			val = a.Value.String()
+			return false
+		}
+		return true
+	})
+	return val
+}
+
+// TestReportError_ScriptErrorLogsOutput verifies that when the executor returns
+// a *diagnostic.ScriptError, the structured log record contains msg="script failed"
+// along with script, error, and output attributes. This ensures operators can see
+// script failure details in journalctl without digging through log files.
+func TestReportError_ScriptErrorLogsOutput(t *testing.T) {
+	handler := &captureSlogHandler{}
+	logger := slog.New(handler)
+
+	svc := &stubCommandService{
+		completeFunc: func(_ context.Context, _, _ string, _ *Envelope) error {
+			return nil
+		},
+	}
+
+	p := NewPoller(svc, nil, nil, &stubDeploymentTracker{}, "i-host",
+		time.Millisecond, time.Millisecond, time.Millisecond, time.Second, logger)
+
+	se := &diagnostic.ScriptError{
+		Code:       diagnostic.ScriptFailed,
+		ScriptName: "scripts/start.sh",
+		Message:    "script at scripts/start.sh failed with exit code 1",
+		Log:        "Script - scripts/start.sh\nError: port 8080 already in use\n",
+	}
+
+	p.reportError(context.Background(), "hc-test", se)
+
+	rec := handler.findRecord("script failed")
+	if rec == nil {
+		t.Fatal("expected log record with msg=\"script failed\", not found")
+	}
+	if got := attrValue(rec, "script"); got != "scripts/start.sh" {
+		t.Errorf("script attr = %q, want %q", got, "scripts/start.sh")
+	}
+	if got := attrValue(rec, "output"); got == "" {
+		t.Error("output attr should be non-empty")
+	}
+}
+
+// TestReportError_PlainErrorLogsCommandFailed verifies that when the executor
+// returns a plain error (not *diagnostic.ScriptError), the log record uses
+// msg="command failed". This is a regression guard ensuring the generic branch
+// was not accidentally removed when adding the script-specific branch.
+func TestReportError_PlainErrorLogsCommandFailed(t *testing.T) {
+	handler := &captureSlogHandler{}
+	logger := slog.New(handler)
+
+	svc := &stubCommandService{
+		completeFunc: func(_ context.Context, _, _ string, _ *Envelope) error {
+			return nil
+		},
+	}
+
+	p := NewPoller(svc, nil, nil, &stubDeploymentTracker{}, "i-host",
+		time.Millisecond, time.Millisecond, time.Millisecond, time.Second, logger)
+
+	p.reportError(context.Background(), "hc-test", fmt.Errorf("network timeout"))
+
+	rec := handler.findRecord("command failed")
+	if rec == nil {
+		t.Fatal("expected log record with msg=\"command failed\", not found")
+	}
+	if got := attrValue(rec, "error"); got == "" {
+		t.Error("error attr should be non-empty")
+	}
+}
+
 // TestProcessCommand_ParseError verifies that when SpecParser.Parse returns an
 // error, the poller calls Complete with "Failed". This covers the parse-error
 // branch in processCommand and ensures malformed deployment specifications are
