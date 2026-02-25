@@ -65,12 +65,25 @@ func BuildFromError(err error) string {
 	return Build(UnknownError, "", msg, "")
 }
 
-// BuildFromScriptError creates a diagnostic from a script execution error,
-// preserving the error code, script name, and captured log output.
+// ScriptError carries all four diagnostic fields through the error chain so
+// that reportError can extract rich failure context via errors.As.
 //
-//	payload := diagnostic.BuildFromScriptError(ScriptFailed, "deploy.sh", "exit 1", logOutput)
-func BuildFromScriptError(code ErrorCode, scriptName, message, log string) string {
-	return Build(code, scriptName, message, log)
+//	return &diagnostic.ScriptError{Code: diagnostic.ScriptFailed, ScriptName: "deploy.sh", Message: "exit code 1", Log: logOutput}
+type ScriptError struct {
+	Code       ErrorCode
+	ScriptName string
+	Message    string
+	Log        string
+}
+
+func (e *ScriptError) Error() string { return e.Message }
+
+// BuildFromScriptErr creates a diagnostic JSON payload from a ScriptError.
+//
+//	var se *diagnostic.ScriptError
+//	if errors.As(err, &se) { payload = diagnostic.BuildFromScriptErr(se) }
+func BuildFromScriptErr(se *ScriptError) string {
+	return Build(se.Code, se.ScriptName, se.Message, se.Log)
 }
 
 // BuildFailedAfterRestart creates a diagnostic for lifecycle events that were

@@ -2,13 +2,16 @@ package hookrunner
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
+	"github.com/gurre/codedeploy-agent-go/logic/diagnostic"
 	"github.com/gurre/codedeploy-agent-go/logic/lifecycle"
 )
 
@@ -124,8 +127,10 @@ hooks:
 	}
 }
 
-// TestRunFailedScript verifies that a non-zero exit code from a script
-// returns an error, which the poller uses to report failure.
+// TestRunFailedScript verifies that a non-zero exit code returns a
+// *diagnostic.ScriptError with Code=ScriptFailed, the script name, and
+// captured log output. The poller uses errors.As to extract these fields
+// for the PutHostCommandComplete diagnostic payload.
 func TestRunFailedScript(t *testing.T) {
 	appspec := fmt.Sprintf(`
 version: 0.0
@@ -151,9 +156,25 @@ hooks:
 	if err == nil {
 		t.Fatal("expected error for failed script")
 	}
+
+	var se *diagnostic.ScriptError
+	if !errors.As(err, &se) {
+		t.Fatalf("expected *diagnostic.ScriptError, got %T", err)
+	}
+	if se.Code != diagnostic.ScriptFailed {
+		t.Errorf("Code = %d, want %d", se.Code, diagnostic.ScriptFailed)
+	}
+	if se.ScriptName != "scripts/install.sh" {
+		t.Errorf("ScriptName = %q", se.ScriptName)
+	}
+	if se.Log == "" {
+		t.Error("Log should contain captured script output")
+	}
 }
 
-// TestRunTimedOutScript verifies that a timed-out script returns an error.
+// TestRunTimedOutScript verifies that a timed-out script returns a
+// *diagnostic.ScriptError with Code=ScriptTimedOut. This distinct error code
+// lets the CodeDeploy console show "timed out" instead of generic "failed".
 func TestRunTimedOutScript(t *testing.T) {
 	appspec := fmt.Sprintf(`
 version: 0.0
@@ -179,6 +200,20 @@ hooks:
 	})
 	if err == nil {
 		t.Fatal("expected error for timed out script")
+	}
+
+	var se *diagnostic.ScriptError
+	if !errors.As(err, &se) {
+		t.Fatalf("expected *diagnostic.ScriptError, got %T", err)
+	}
+	if se.Code != diagnostic.ScriptTimedOut {
+		t.Errorf("Code = %d, want %d", se.Code, diagnostic.ScriptTimedOut)
+	}
+	if se.ScriptName != "scripts/install.sh" {
+		t.Errorf("ScriptName = %q", se.ScriptName)
+	}
+	if se.Log == "" {
+		t.Error("Log should contain captured script output")
 	}
 }
 
@@ -403,6 +438,22 @@ func TestRun_FirstDeployment_ApplicationStopIsNoopWithoutArchive(t *testing.T) {
 	}
 }
 
+// sequentialScriptRunner returns different results per call. Used to test
+// multi-script hooks where earlier scripts succeed and a later one fails.
+type sequentialScriptRunner struct {
+	results []ScriptResult
+	calls   int
+}
+
+func (s *sequentialScriptRunner) Run(_ context.Context, _ string, _ map[string]string, _ int) (ScriptResult, error) {
+	i := s.calls
+	s.calls++
+	if i < len(s.results) {
+		return s.results[i], nil
+	}
+	return ScriptResult{}, nil
+}
+
 // errScriptRunner is a ScriptRunner that returns a configured error.
 // Used to test that Run propagates ScriptRunner errors correctly.
 type errScriptRunner struct {
@@ -443,5 +494,99 @@ hooks:
 	})
 	if err == nil {
 		t.Fatal("expected error from ScriptRunner to propagate through Run")
+	}
+}
+
+// TestRunMultiScript_SecondFails verifies that when the first script succeeds
+// and the second fails, the ScriptError.Log contains output from both scripts.
+// This exercises the log accumulation across the script loop — a regression
+// here would lose the first script's output from the diagnostic payload.
+func TestRunMultiScript_SecondFails(t *testing.T) {
+	appspec := fmt.Sprintf(`
+version: 0.0
+os: %s
+hooks:
+  BeforeInstall:
+    - location: scripts/install.sh
+      timeout: 60
+    - location: scripts/install.sh
+      timeout: 60
+`, testOS())
+	deployDir := setupDeployment(t, appspec)
+
+	sr := &sequentialScriptRunner{
+		results: []ScriptResult{
+			{ExitCode: 0, Stdout: "first ok\n"},
+			{ExitCode: 1, Stdout: "second boom\n"},
+		},
+	}
+	runner := NewRunner(sr, slog.Default())
+
+	_, err := runner.Run(context.Background(), RunArgs{
+		LifecycleEvent:      lifecycle.BeforeInstall,
+		DeploymentID:        "d-multi",
+		ApplicationName:     "app",
+		DeploymentGroupName: "grp",
+		DeploymentCreator:   "user",
+		DeploymentType:      "IN_PLACE",
+		AppSpecPath:         "appspec.yml",
+		DeploymentRootDir:   deployDir,
+	})
+	if err == nil {
+		t.Fatal("expected error for second failed script")
+	}
+
+	var se *diagnostic.ScriptError
+	if !errors.As(err, &se) {
+		t.Fatalf("expected *diagnostic.ScriptError, got %T", err)
+	}
+	if se.Code != diagnostic.ScriptFailed {
+		t.Errorf("Code = %d, want %d", se.Code, diagnostic.ScriptFailed)
+	}
+
+	// Log must contain output from both scripts, not just the failing one.
+	if !strings.Contains(se.Log, "first ok") {
+		t.Errorf("Log missing first script output: %q", se.Log)
+	}
+	if !strings.Contains(se.Log, "second boom") {
+		t.Errorf("Log missing second script output: %q", se.Log)
+	}
+}
+
+// TestRunScriptRunnerError_IsNotScriptError verifies that when the ScriptRunner
+// itself returns an error (e.g. binary not found), the error is NOT a
+// *diagnostic.ScriptError. This ensures the poller's reportError fallback path
+// (BuildFromError/UnknownError) handles infrastructure failures distinctly from
+// script execution failures.
+func TestRunScriptRunnerError_IsNotScriptError(t *testing.T) {
+	appspec := fmt.Sprintf(`
+version: 0.0
+os: %s
+hooks:
+  BeforeInstall:
+    - location: scripts/install.sh
+      timeout: 60
+`, testOS())
+	deployDir := setupDeployment(t, appspec)
+	sr := &errScriptRunner{err: fmt.Errorf("exec: no such file")}
+	runner := NewRunner(sr, slog.Default())
+
+	_, err := runner.Run(context.Background(), RunArgs{
+		LifecycleEvent:      lifecycle.BeforeInstall,
+		DeploymentID:        "d-infra-err",
+		ApplicationName:     "app",
+		DeploymentGroupName: "grp",
+		DeploymentCreator:   "user",
+		DeploymentType:      "IN_PLACE",
+		AppSpecPath:         "appspec.yml",
+		DeploymentRootDir:   deployDir,
+	})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+
+	var se *diagnostic.ScriptError
+	if errors.As(err, &se) {
+		t.Error("infrastructure errors from ScriptRunner should not be *diagnostic.ScriptError")
 	}
 }

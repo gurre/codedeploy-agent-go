@@ -1,6 +1,8 @@
 package diagnostic
 
 import (
+	"errors"
+	"fmt"
 	"testing"
 
 	json "github.com/goccy/go-json"
@@ -22,10 +24,57 @@ func TestBuildSuccessRoundTrips(t *testing.T) {
 	}
 }
 
-// TestBuildFromScriptErrorPreservesFields ensures all fields survive
-// serialization, which is critical for the service to display correct diagnostics.
-func TestBuildFromScriptErrorPreservesFields(t *testing.T) {
-	payload := BuildFromScriptError(ScriptFailed, "deploy.sh", "exit code 1", "[stdout]hello\n")
+// TestScriptErrorSatisfiesError verifies that *ScriptError implements the error
+// interface and that Error() returns the Message field. This is the contract
+// that fmt.Errorf wrapping and errors.As depend on.
+func TestScriptErrorSatisfiesError(t *testing.T) {
+	se := &ScriptError{
+		Code:       ScriptFailed,
+		ScriptName: "deploy.sh",
+		Message:    "exit code 1",
+		Log:        "stdout output",
+	}
+	var err error = se
+	if err.Error() != "exit code 1" {
+		t.Errorf("Error() = %q, want %q", err.Error(), "exit code 1")
+	}
+}
+
+// TestScriptErrorExtractableViaErrorsAs verifies that a *ScriptError wrapped
+// with fmt.Errorf is extractable via errors.As. The poller uses this pattern
+// to detect script failures and build rich diagnostics.
+func TestScriptErrorExtractableViaErrorsAs(t *testing.T) {
+	se := &ScriptError{
+		Code:       ScriptTimedOut,
+		ScriptName: "start.sh",
+		Message:    "timed out",
+		Log:        "partial output",
+	}
+	wrapped := fmt.Errorf("executor: %w", se)
+
+	var extracted *ScriptError
+	if !errors.As(wrapped, &extracted) {
+		t.Fatal("errors.As failed to extract *ScriptError from wrapped error")
+	}
+	if extracted.Code != ScriptTimedOut {
+		t.Errorf("Code = %d, want %d", extracted.Code, ScriptTimedOut)
+	}
+	if extracted.ScriptName != "start.sh" {
+		t.Errorf("ScriptName = %q, want %q", extracted.ScriptName, "start.sh")
+	}
+}
+
+// TestBuildFromScriptErrRoundTrip ensures all four diagnostic fields survive
+// JSON serialization via BuildFromScriptErr. This is the path used when the
+// poller detects a ScriptError and sends it to PutHostCommandComplete.
+func TestBuildFromScriptErrRoundTrip(t *testing.T) {
+	se := &ScriptError{
+		Code:       ScriptFailed,
+		ScriptName: "deploy.sh",
+		Message:    "exit code 1",
+		Log:        "[stdout]hello\n",
+	}
+	payload := BuildFromScriptErr(se)
 	var d Diagnostic
 	if err := json.Unmarshal([]byte(payload), &d); err != nil {
 		t.Fatalf("JSON unmarshal failed: %v", err)
@@ -38,6 +87,9 @@ func TestBuildFromScriptErrorPreservesFields(t *testing.T) {
 	}
 	if d.Log != "[stdout]hello\n" {
 		t.Errorf("Log = %q", d.Log)
+	}
+	if d.Message != "exit code 1" {
+		t.Errorf("Message = %q", d.Message)
 	}
 }
 
@@ -64,6 +116,47 @@ func TestBuildFailedAfterRestartCode(t *testing.T) {
 	}
 	if d.ErrorCode != FailedAfterRestart {
 		t.Errorf("ErrorCode = %d, want %d", d.ErrorCode, FailedAfterRestart)
+	}
+}
+
+// TestBuildFromScriptErrZeroValues verifies that a ScriptError with empty
+// string fields and zero Code serializes without panics and produces valid JSON.
+// This guards against nil-like edge cases when a ScriptError is constructed
+// with minimal fields (e.g. only Code set).
+func TestBuildFromScriptErrZeroValues(t *testing.T) {
+	se := &ScriptError{Code: Succeeded}
+	payload := BuildFromScriptErr(se)
+	var d Diagnostic
+	if err := json.Unmarshal([]byte(payload), &d); err != nil {
+		t.Fatalf("JSON unmarshal failed: %v", err)
+	}
+	if d.ErrorCode != Succeeded {
+		t.Errorf("ErrorCode = %d, want %d", d.ErrorCode, Succeeded)
+	}
+	if d.ScriptName != "" {
+		t.Errorf("ScriptName should be empty, got %q", d.ScriptName)
+	}
+	if d.Message != "" {
+		t.Errorf("Message should be empty, got %q", d.Message)
+	}
+	if d.Log != "" {
+		t.Errorf("Log should be empty, got %q", d.Log)
+	}
+}
+
+// TestScriptErrorMessageUsedByErrorInterface verifies that Error() returns
+// exactly the Message field, not a formatted version. This matters because
+// the poller logs err.Error() and separately extracts fields via errors.As —
+// if Error() appended the script name, the log line would be redundant.
+func TestScriptErrorMessageUsedByErrorInterface(t *testing.T) {
+	se := &ScriptError{
+		Code:       ScriptFailed,
+		ScriptName: "deploy.sh",
+		Message:    "exit code 1",
+		Log:        "some output",
+	}
+	if se.Error() != se.Message {
+		t.Errorf("Error() = %q, want exactly Message %q", se.Error(), se.Message)
 	}
 }
 

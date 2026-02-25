@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 
 	"github.com/gurre/codedeploy-agent-go/logic/appspec"
+	"github.com/gurre/codedeploy-agent-go/logic/diagnostic"
 	"github.com/gurre/codedeploy-agent-go/logic/lifecycle"
 )
 
@@ -108,13 +109,21 @@ func (r *Runner) Run(ctx context.Context, args RunArgs) (HookResult, error) {
 		logOutput += formatScriptLog(script.Location, result.Stdout, result.Stderr)
 
 		if result.TimedOut {
-			return HookResult{Log: logOutput}, fmt.Errorf(
-				"script at %s timed out after %d seconds", script.Location, script.Timeout)
+			return HookResult{Log: logOutput}, &diagnostic.ScriptError{
+				Code:       diagnostic.ScriptTimedOut,
+				ScriptName: script.Location,
+				Message:    fmt.Sprintf("script at %s timed out after %d seconds", script.Location, script.Timeout),
+				Log:        logOutput,
+			}
 		}
 
 		if result.ExitCode != 0 {
-			return HookResult{Log: logOutput}, fmt.Errorf(
-				"script at %s failed with exit code %d", script.Location, result.ExitCode)
+			return HookResult{Log: logOutput}, &diagnostic.ScriptError{
+				Code:       diagnostic.ScriptFailed,
+				ScriptName: script.Location,
+				Message:    fmt.Sprintf("script at %s failed with exit code %d", script.Location, result.ExitCode),
+				Log:        logOutput,
+			}
 		}
 	}
 

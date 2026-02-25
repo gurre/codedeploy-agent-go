@@ -9,7 +9,9 @@ import (
 	"testing"
 	"time"
 
+	json "github.com/goccy/go-json"
 	"github.com/gurre/codedeploy-agent-go/logic/deployspec"
+	"github.com/gurre/codedeploy-agent-go/logic/diagnostic"
 )
 
 // TestProcessCommand_Success verifies the full happy path through the polling loop:
@@ -764,6 +766,229 @@ func TestProcessCommand_NilSpec(t *testing.T) {
 	case status := <-completeCh:
 		if status != "Failed" {
 			t.Fatalf("expected Complete status Failed, got %q", status)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for Complete call")
+	}
+
+	cancel()
+}
+
+// TestProcessCommand_ScriptErrorDiagnostic verifies that when Execute returns
+// a *diagnostic.ScriptError (wrapped or direct), reportError extracts the rich
+// diagnostic fields — error_code, script_name, message, log — into the Complete
+// payload. Without this, the console only shows "UnknownError" with no log output.
+func TestProcessCommand_ScriptErrorDiagnostic(t *testing.T) {
+	completeCh := make(chan *Envelope, 1)
+
+	svc := &stubCommandService{
+		pollFunc: pollOnce(&HostCommand{
+			HostCommandIdentifier: "hc-script-err",
+			HostIdentifier:        "i-host",
+			DeploymentExecutionID: "exec-script-err",
+			CommandName:           "Install",
+		}),
+		getSpecFunc: func(_ context.Context, _, _ string) (*Envelope, string, error) {
+			return &Envelope{Format: "TEXT/JSON", Payload: `{}`}, "CodeDeploy", nil
+		},
+		acknowledgeFunc: func(_ context.Context, _ string, _ *Envelope) (string, error) {
+			return "InProgress", nil
+		},
+		completeFunc: func(_ context.Context, _, _ string, diag *Envelope) error {
+			completeCh <- diag
+			return nil
+		},
+	}
+
+	spec := deployspec.Spec{
+		DeploymentID:        "d-DIAG",
+		DeploymentGroupID:   "dg-1",
+		DeploymentGroupName: "prod",
+		ApplicationName:     "myapp",
+	}
+	parser := &stubSpecParser{spec: spec}
+	exec := &stubCommandExecutor{
+		executeFunc: func(_ context.Context, _ string, _ deployspec.Spec) (string, error) {
+			return "", &diagnostic.ScriptError{
+				Code:       diagnostic.ScriptFailed,
+				ScriptName: "scripts/start.sh",
+				Message:    "script at scripts/start.sh failed with exit code 1",
+				Log:        "Script - scripts/start.sh\nError: port in use\n",
+			}
+		},
+	}
+	tracker := &stubDeploymentTracker{}
+
+	p := NewPoller(svc, exec, parser, tracker, "i-host",
+		time.Millisecond, time.Millisecond, time.Millisecond, time.Second, slog.Default())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go func() { _ = p.Run(ctx) }()
+
+	select {
+	case diag := <-completeCh:
+		var d diagnostic.Diagnostic
+		if err := json.Unmarshal([]byte(diag.Payload), &d); err != nil {
+			t.Fatalf("failed to unmarshal diagnostic payload: %v", err)
+		}
+		if d.ErrorCode != diagnostic.ScriptFailed {
+			t.Errorf("error_code = %d, want %d (ScriptFailed)", d.ErrorCode, diagnostic.ScriptFailed)
+		}
+		if d.ScriptName != "scripts/start.sh" {
+			t.Errorf("script_name = %q, want %q", d.ScriptName, "scripts/start.sh")
+		}
+		if d.Log == "" {
+			t.Error("log field should contain captured script output")
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for Complete call")
+	}
+
+	cancel()
+}
+
+// TestProcessCommand_WrappedScriptError verifies that reportError detects a
+// *diagnostic.ScriptError even when wrapped by an intermediate layer (e.g.
+// fmt.Errorf with %w). The executor does not currently wrap, but this guards
+// against future refactors that add wrapping in the error chain.
+func TestProcessCommand_WrappedScriptError(t *testing.T) {
+	completeCh := make(chan *Envelope, 1)
+
+	svc := &stubCommandService{
+		pollFunc: pollOnce(&HostCommand{
+			HostCommandIdentifier: "hc-wrapped",
+			HostIdentifier:        "i-host",
+			DeploymentExecutionID: "exec-wrapped",
+			CommandName:           "Install",
+		}),
+		getSpecFunc: func(_ context.Context, _, _ string) (*Envelope, string, error) {
+			return &Envelope{Format: "TEXT/JSON", Payload: `{}`}, "CodeDeploy", nil
+		},
+		acknowledgeFunc: func(_ context.Context, _ string, _ *Envelope) (string, error) {
+			return "InProgress", nil
+		},
+		completeFunc: func(_ context.Context, _, _ string, diag *Envelope) error {
+			completeCh <- diag
+			return nil
+		},
+	}
+
+	spec := deployspec.Spec{
+		DeploymentID:        "d-WRAP",
+		DeploymentGroupID:   "dg-1",
+		DeploymentGroupName: "prod",
+		ApplicationName:     "myapp",
+	}
+	parser := &stubSpecParser{spec: spec}
+	exec := &stubCommandExecutor{
+		executeFunc: func(_ context.Context, _ string, _ deployspec.Spec) (string, error) {
+			inner := &diagnostic.ScriptError{
+				Code:       diagnostic.ScriptTimedOut,
+				ScriptName: "scripts/slow.sh",
+				Message:    "script at scripts/slow.sh timed out after 30 seconds",
+				Log:        "Script - scripts/slow.sh\nstill running...\n",
+			}
+			// Simulate an intermediate layer wrapping the error
+			return "", fmt.Errorf("executor: hooks: %w", inner)
+		},
+	}
+	tracker := &stubDeploymentTracker{}
+
+	p := NewPoller(svc, exec, parser, tracker, "i-host",
+		time.Millisecond, time.Millisecond, time.Millisecond, time.Second, slog.Default())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go func() { _ = p.Run(ctx) }()
+
+	select {
+	case diag := <-completeCh:
+		var d diagnostic.Diagnostic
+		if err := json.Unmarshal([]byte(diag.Payload), &d); err != nil {
+			t.Fatalf("failed to unmarshal diagnostic payload: %v", err)
+		}
+		if d.ErrorCode != diagnostic.ScriptTimedOut {
+			t.Errorf("error_code = %d, want %d (ScriptTimedOut)", d.ErrorCode, diagnostic.ScriptTimedOut)
+		}
+		if d.ScriptName != "scripts/slow.sh" {
+			t.Errorf("script_name = %q, want %q", d.ScriptName, "scripts/slow.sh")
+		}
+		if d.Log == "" {
+			t.Error("log field should contain captured script output")
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for Complete call")
+	}
+
+	cancel()
+}
+
+// TestProcessCommand_NonScriptErrorPayload verifies that when Execute returns a
+// plain error (not *diagnostic.ScriptError), reportError falls back to
+// BuildFromError which uses error_code 5 (UnknownError) and an empty log field.
+// This ensures non-script failures (network errors, parse errors) don't
+// accidentally get script-specific error codes.
+func TestProcessCommand_NonScriptErrorPayload(t *testing.T) {
+	completeCh := make(chan *Envelope, 1)
+
+	svc := &stubCommandService{
+		pollFunc: pollOnce(&HostCommand{
+			HostCommandIdentifier: "hc-plain-err",
+			HostIdentifier:        "i-host",
+			DeploymentExecutionID: "exec-plain-err",
+			CommandName:           "Install",
+		}),
+		getSpecFunc: func(_ context.Context, _, _ string) (*Envelope, string, error) {
+			return &Envelope{Format: "TEXT/JSON", Payload: `{}`}, "CodeDeploy", nil
+		},
+		acknowledgeFunc: func(_ context.Context, _ string, _ *Envelope) (string, error) {
+			return "InProgress", nil
+		},
+		completeFunc: func(_ context.Context, _, _ string, diag *Envelope) error {
+			completeCh <- diag
+			return nil
+		},
+	}
+
+	spec := deployspec.Spec{
+		DeploymentID:        "d-PLAIN",
+		DeploymentGroupID:   "dg-1",
+		DeploymentGroupName: "prod",
+		ApplicationName:     "myapp",
+	}
+	parser := &stubSpecParser{spec: spec}
+	exec := &stubCommandExecutor{
+		executeFunc: func(_ context.Context, _ string, _ deployspec.Spec) (string, error) {
+			return "", fmt.Errorf("network timeout fetching bundle")
+		},
+	}
+	tracker := &stubDeploymentTracker{}
+
+	p := NewPoller(svc, exec, parser, tracker, "i-host",
+		time.Millisecond, time.Millisecond, time.Millisecond, time.Second, slog.Default())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go func() { _ = p.Run(ctx) }()
+
+	select {
+	case diag := <-completeCh:
+		var d diagnostic.Diagnostic
+		if err := json.Unmarshal([]byte(diag.Payload), &d); err != nil {
+			t.Fatalf("failed to unmarshal diagnostic payload: %v", err)
+		}
+		if d.ErrorCode != diagnostic.UnknownError {
+			t.Errorf("error_code = %d, want %d (UnknownError)", d.ErrorCode, diagnostic.UnknownError)
+		}
+		if d.Log != "" {
+			t.Errorf("log should be empty for non-script errors, got %q", d.Log)
+		}
+		if d.ScriptName != "" {
+			t.Errorf("script_name should be empty for non-script errors, got %q", d.ScriptName)
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("timed out waiting for Complete call")
