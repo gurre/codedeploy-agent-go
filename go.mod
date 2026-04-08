@@ -8,7 +8,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/credentials v1.19.7
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.96.0
 	github.com/goccy/go-json v0.10.5
-	go.mozilla.org/pkcs7 v0.9.0
+	github.com/gurre/pkcs7 v0.0.0-20260408214118-8095bc9cf769
 	gopkg.in/yaml.v3 v3.0.1
 )
 

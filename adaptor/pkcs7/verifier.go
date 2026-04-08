@@ -7,7 +7,7 @@ import (
 	"encoding/pem"
 	"fmt"
 
-	gopkcs7 "go.mozilla.org/pkcs7"
+	gopkcs7 "github.com/gurre/pkcs7"
 )
 
 //go:embed ca-chain.pem
@@ -41,7 +41,7 @@ func NewVerifierFromPEM(_ []byte) (*Verifier, error) {
 // We decode the PEM wrapper to extract DER bytes before parsing.
 func (v *Verifier) Verify(signature []byte) ([]byte, error) {
 	// Decode PEM format to DER bytes.
-	// The go.mozilla.org/pkcs7.Parse() function requires DER-encoded input,
+	// The github.com/gurre/pkcs7.Parse() function requires DER-encoded input,
 	// but CodeDeploy returns PEM-encoded PKCS7 with -----BEGIN PKCS7----- headers.
 	block, _ := pem.Decode(signature)
 	if block == nil {
