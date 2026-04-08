@@ -372,6 +372,10 @@ func (e *Executor) appendScriptLog(layout deployment.Layout, log string) {
 		return
 	}
 	logFile := layout.ScriptLogFile()
+	if err := os.MkdirAll(filepath.Dir(logFile), 0o755); err != nil {
+		e.logger.Warn("failed to create script log dir", "error", err)
+		return
+	}
 	f, err := os.OpenFile(logFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
 		e.logger.Warn("failed to open script log", "error", err)

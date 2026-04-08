@@ -4,6 +4,8 @@
 package deployspec
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"strings"
 
@@ -137,9 +139,14 @@ func Parse(env Envelope, verifier CertificateVerifier, allowUnsigned bool) (Spec
 			return Spec{}, fmt.Errorf("deployspec: no certificate verifier for PKCS7/JSON")
 		}
 		var err error
-		data, err = verifier.Verify([]byte(env.Payload))
+		raw := []byte(env.Payload)
+		data, err = verifier.Verify(raw)
 		if err != nil {
-			return Spec{}, fmt.Errorf("deployspec: PKCS7 verification failed: %w", err)
+			digest := sha256.Sum256(raw)
+			head := raw[:min(32, len(raw))]
+			tail := raw[max(0, len(raw)-32):]
+			return Spec{}, fmt.Errorf("deployspec: PKCS7 verification failed: %w\n\tPayload len : %d\n\tPayload SHA : %s\n\tPayload head: %s\n\tPayload tail: %s",
+				err, len(raw), hex.EncodeToString(digest[:]), hex.EncodeToString(head), hex.EncodeToString(tail))
 		}
 	case "TEXT/JSON":
 		if !allowUnsigned {

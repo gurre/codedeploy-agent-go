@@ -1178,3 +1178,31 @@ func TestIsNoop_UnknownCommand(t *testing.T) {
 		t.Error("unknown command should be noop")
 	}
 }
+
+// TestAppendScriptLog_CreatesLogsDir verifies that appendScriptLog creates
+// the logs/ directory when it does not yet exist, as happens for pre-download
+// hooks (e.g. ApplicationStop) that run before downloadBundle creates it.
+func TestAppendScriptLog_CreatesLogsDir(t *testing.T) {
+	rootDir := t.TempDir()
+
+	dl := &fakeBundleDownloader{}
+	unpacker := &fakeArchiveUnpacker{}
+	hookRunner := &fakeHookRunner{}
+	inst := &fakeInstaller{}
+	fileOp := &realFileOperator{}
+
+	exec := newTestExecutor(t, dl, unpacker, hookRunner, inst, fileOp, rootDir)
+
+	layout := deployment.NewLayout(rootDir, "dg-1", "d-100")
+	content := "hook output line\n"
+
+	exec.appendScriptLog(layout, content)
+
+	got, err := os.ReadFile(layout.ScriptLogFile())
+	if err != nil {
+		t.Fatalf("expected script log file to exist: %v", err)
+	}
+	if string(got) != content {
+		t.Errorf("script log content = %q, want %q", got, content)
+	}
+}
